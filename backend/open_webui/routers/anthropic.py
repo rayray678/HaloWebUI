@@ -58,6 +58,7 @@ from open_webui.utils.payload import (
     apply_model_params_to_body_openai,
     apply_model_system_prompt_to_body,
 )
+from open_webui.utils.error_handling import build_error_detail
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["OPENAI"])
@@ -807,7 +808,10 @@ async def verify_connection(
         raise
     except Exception as e:
         log.exception(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Open WebUI: Server Connection Error")
+        raise HTTPException(
+            status_code=500,
+            detail=build_error_detail(e, prefix="Anthropic"),
+        )
 
 
 async def get_all_models_responses(request: Request, user: UserModel) -> list:

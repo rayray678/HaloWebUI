@@ -44,6 +44,7 @@ from open_webui.utils.payload import (
     apply_model_params_to_body_openai,
     apply_model_system_prompt_to_body,
 )
+from open_webui.utils.error_handling import build_error_detail
 
 
 log = logging.getLogger(__name__)
@@ -218,7 +219,7 @@ async def send_get_request(url: str, key: str = None, config: dict = None) -> di
             }
     except Exception as e:
         log.error(f"Connection error: {e}")
-        return None
+        return {"error": {"message": build_error_detail(e, prefix="Gemini")}}
 
 
 def _map_finish_reason(fr: Optional[str]) -> Optional[str]:
@@ -1287,7 +1288,10 @@ async def verify_connection(
     try:
         response = await send_get_request(f"{url}/models", key, config)
         if response is None:
-            raise HTTPException(status_code=500, detail="Failed to connect to Gemini API")
+            raise HTTPException(
+                status_code=500,
+                detail="Gemini: Connection to upstream server failed",
+            )
         if "error" in response:
             raise HTTPException(
                 status_code=response.get("error", {}).get("code", 500),
@@ -1298,7 +1302,10 @@ async def verify_connection(
         raise
     except Exception as e:
         log.exception(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Open WebUI: Server Connection Error")
+        raise HTTPException(
+            status_code=500,
+            detail=build_error_detail(e, prefix="Gemini"),
+        )
 
 
 @router.post("/chat/completions")

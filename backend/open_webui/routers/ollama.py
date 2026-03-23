@@ -39,6 +39,11 @@ from open_webui.models.models import Models
 from open_webui.utils.misc import (
     calculate_sha256,
 )
+from open_webui.utils.error_handling import (
+    build_error_detail,
+    read_aiohttp_error_payload,
+    read_requests_error_payload,
+)
 from open_webui.utils.payload import (
     apply_model_params_to_body_ollama,
     apply_model_params_to_body_openai,
@@ -113,6 +118,20 @@ async def cleanup_response(
         await session.close()
 
 
+def _format_ollama_error_detail(payload=None, error=None) -> str:
+    return build_error_detail(payload, error, prefix="Ollama")
+
+
+async def _read_ollama_aiohttp_error_detail(response=None, error=None) -> str:
+    payload = await read_aiohttp_error_payload(response) if response is not None else None
+    return _format_ollama_error_detail(payload, error)
+
+
+def _read_ollama_requests_error_detail(response=None, error=None) -> str:
+    payload = read_requests_error_payload(response)
+    return _format_ollama_error_detail(payload, error)
+
+
 async def send_post_request(
     url: str,
     payload: Union[str, bytes],
@@ -168,19 +187,9 @@ async def send_post_request(
             return res
 
     except Exception as e:
-        detail = None
-
-        if r is not None:
-            try:
-                res = await r.json()
-                if "error" in res:
-                    detail = f"Ollama: {res.get('error', 'Unknown error')}"
-            except Exception:
-                detail = f"Ollama: {e}"
-
         raise HTTPException(
             status_code=r.status if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=await _read_ollama_aiohttp_error_detail(r, e),
         )
 
 
@@ -348,7 +357,8 @@ async def verify_connection(
         except aiohttp.ClientError as e:
             log.exception(f"Client error: {str(e)}")
             raise HTTPException(
-                status_code=500, detail="Open WebUI: Server Connection Error"
+                status_code=500,
+                detail=_format_ollama_error_detail(error=e),
             )
         except Exception as e:
             log.exception(f"Unexpected error: {e}")
@@ -743,7 +753,7 @@ async def get_ollama_tags(
 
             raise HTTPException(
                 status_code=r.status_code if r else 500,
-                detail=detail if detail else "Open WebUI: Server Connection Error",
+                detail=_read_ollama_requests_error_detail(r, e),
             )
 
     if user.role == "user" and not BYPASS_MODEL_ACCESS_CONTROL:
@@ -822,7 +832,7 @@ async def get_ollama_versions(request: Request, url_idx: Optional[int] = None, u
 
                 raise HTTPException(
                     status_code=r.status_code if r else 500,
-                    detail=detail if detail else "Open WebUI: Server Connection Error",
+                    detail=_read_ollama_requests_error_detail(r, e),
                 )
     else:
         return {"version": False}
@@ -1010,7 +1020,7 @@ async def copy_model(
 
         raise HTTPException(
             status_code=r.status_code if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=_read_ollama_requests_error_detail(r, e),
         )
 
 
@@ -1075,7 +1085,7 @@ async def delete_model(
 
         raise HTTPException(
             status_code=r.status_code if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=_read_ollama_requests_error_detail(r, e),
         )
 
 
@@ -1134,7 +1144,7 @@ async def show_model_info(
 
         raise HTTPException(
             status_code=r.status_code if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=_read_ollama_requests_error_detail(r, e),
         )
 
 
@@ -1214,7 +1224,7 @@ async def embed(
 
         raise HTTPException(
             status_code=r.status_code if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=_read_ollama_requests_error_detail(r, e),
         )
 
 
@@ -1293,7 +1303,7 @@ async def embeddings(
 
         raise HTTPException(
             status_code=r.status_code if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=_read_ollama_requests_error_detail(r, e),
         )
 
 
@@ -1727,7 +1737,7 @@ async def get_openai_models(
             ]
         except Exception as e:
             log.exception(e)
-            error_detail = "Open WebUI: Server Connection Error"
+            error_detail = _read_ollama_requests_error_detail(r, e)
             if r is not None:
                 try:
                     res = r.json()

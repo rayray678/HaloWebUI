@@ -44,6 +44,11 @@ from open_webui.env import (
     DEVICE_TYPE,
     ENABLE_FORWARD_USER_INFO_HEADERS,
 )
+from open_webui.utils.error_handling import (
+    build_error_detail,
+    read_aiohttp_error_payload,
+    read_requests_error_payload,
+)
 
 
 router = APIRouter()
@@ -120,6 +125,16 @@ def set_faster_whisper_model(model: str, auto_update: bool = False):
             faster_whisper_kwargs["local_files_only"] = False
             whisper_model = WhisperModel(**faster_whisper_kwargs)
     return whisper_model
+
+
+async def _read_audio_aiohttp_error_detail(response=None, error=None, prefix: str | None = None) -> str:
+    payload = await read_aiohttp_error_payload(response) if response is not None else None
+    return build_error_detail(payload, error, prefix=prefix)
+
+
+def _read_audio_requests_error_detail(response=None, error=None, prefix: str | None = None) -> str:
+    payload = read_requests_error_payload(response)
+    return build_error_detail(payload, error, prefix=prefix)
 
 
 ##########################################
@@ -332,7 +347,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
 
             raise HTTPException(
                 status_code=getattr(r, "status", 500) if r else 500,
-                detail=detail if detail else "Open WebUI: Server Connection Error",
+                detail=await _read_audio_aiohttp_error_detail(r, e),
             )
 
     elif request.app.state.config.TTS_ENGINE == "elevenlabs":
@@ -386,7 +401,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
 
             raise HTTPException(
                 status_code=getattr(r, "status", 500) if r else 500,
-                detail=detail if detail else "Open WebUI: Server Connection Error",
+                detail=await _read_audio_aiohttp_error_detail(r, e),
             )
 
     elif request.app.state.config.TTS_ENGINE == "azure":
@@ -449,7 +464,8 @@ async def speech(request: Request, user=Depends(get_verified_user)):
 
             raise HTTPException(
                 status_code=status_code,
-                detail=detail or "Azure TTS: Server Connection Error",
+                detail=detail
+                or await _read_audio_aiohttp_error_detail(r, e, prefix="Azure TTS"),
             )
 
     elif request.app.state.config.TTS_ENGINE == "transformers":
@@ -576,7 +592,7 @@ def transcribe(request: Request, file_path, language: str = ""):
                 except Exception:
                     detail = f"External: {e}"
 
-            raise Exception(detail if detail else "Open WebUI: Server Connection Error")
+            raise Exception(_read_audio_requests_error_detail(r, e))
 
     elif request.app.state.config.STT_ENGINE == "deepgram":
         try:
@@ -641,7 +657,7 @@ def transcribe(request: Request, file_path, language: str = ""):
                         detail = f"External: {res['error'].get('message', '')}"
                 except Exception:
                     detail = f"External: {e}"
-            raise Exception(detail if detail else "Open WebUI: Server Connection Error")
+            raise Exception(_read_audio_requests_error_detail(r, e))
 
     elif request.app.state.config.STT_ENGINE == "azure":
         # Check file exists and size
@@ -753,7 +769,7 @@ def transcribe(request: Request, file_path, language: str = ""):
 
             raise HTTPException(
                 status_code=getattr(r, "status_code", 500) if r else 500,
-                detail=detail if detail else "Open WebUI: Server Connection Error",
+                detail=_read_audio_requests_error_detail(r, e),
             )
 
 

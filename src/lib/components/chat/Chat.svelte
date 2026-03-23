@@ -272,6 +272,17 @@
 		);
 	};
 
+	const shouldIncludeUsageStreamOption = (model) => {
+		const usageCapability = model?.info?.meta?.capabilities?.usage;
+		if (typeof usageCapability === 'boolean') {
+			return usageCapability;
+		}
+
+		// Base OpenAI-compatible models often have no workspace capability metadata,
+		// but many compatible upstreams still support `stream_options.include_usage`.
+		return model?.owned_by === 'openai';
+	};
+
 	const buildFloatingChatRequest = async ({
 		modelId,
 		messages,
@@ -343,7 +354,7 @@
 			chat_id: $chatId ?? undefined,
 			preview_tool_compat: true,
 			model_item: getModelById(model.id),
-			...(stream && (model.info?.meta?.capabilities?.usage ?? false)
+			...(stream && shouldIncludeUsageStreamOption(model)
 				? {
 						stream_options: {
 							include_usage: true
@@ -2285,7 +2296,7 @@
 							}
 						: {}),
 
-				...(stream && (model.info?.meta?.capabilities?.usage ?? false)
+				...(stream && shouldIncludeUsageStreamOption(model)
 					? {
 							stream_options: {
 								include_usage: true

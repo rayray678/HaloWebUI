@@ -49,6 +49,11 @@ from open_webui.utils.payload import (
 from open_webui.utils.misc import (
     convert_logit_bias_input_to_json,
 )
+from open_webui.utils.error_handling import (
+    build_error_detail,
+    read_aiohttp_error_payload,
+    read_requests_error_payload,
+)
 from open_webui.utils.openai_responses import (
     convert_chat_completions_to_responses_payload,
     convert_responses_to_chat_completions,
@@ -895,18 +900,12 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         except Exception as e:
             log.exception(e)
 
-            detail = None
-            if r is not None:
-                try:
-                    res = r.json()
-                    if "error" in res:
-                        detail = f"External: {res['error']}"
-                except Exception:
-                    detail = f"External: {e}"
-
             raise HTTPException(
                 status_code=r.status_code if r else 500,
-                detail=detail if detail else "Open WebUI: Server Connection Error",
+                detail=build_error_detail(
+                    read_requests_error_payload(r),
+                    e,
+                ),
             )
 
     except ValueError:
@@ -1258,7 +1257,8 @@ async def get_models(
                 # ClientError covers all aiohttp requests issues
                 log.exception(f"Client error: {str(e)}")
                 raise HTTPException(
-                    status_code=500, detail="Open WebUI: Server Connection Error"
+                    status_code=500,
+                    detail=build_error_detail(e),
                 )
             except Exception as e:
                 log.exception(f"Unexpected error: {e}")
@@ -1346,7 +1346,8 @@ async def verify_connection(
             # ClientError covers all aiohttp requests issues
             log.exception(f"Client error: {str(e)}")
             raise HTTPException(
-                status_code=500, detail="Open WebUI: Server Connection Error"
+                status_code=500,
+                detail=build_error_detail(e),
             )
         except Exception as e:
             log.exception(f"Unexpected error: {e}")
@@ -1891,19 +1892,14 @@ async def generate_chat_completion(
 
         r.raise_for_status()
         return response
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(e)
 
-        detail = None
-        if isinstance(response, dict):
-            if "error" in response:
-                detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
-        elif isinstance(response, str):
-            detail = response
-
         raise HTTPException(
             status_code=r.status if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=build_error_detail(response, e),
         )
     finally:
         if not streaming and session:
@@ -1966,21 +1962,14 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             response_data = await r.json()
             return response_data
 
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception(e)
-
-        detail = None
-        if r is not None:
-            try:
-                res = await r.json()
-                log.error(res)
-                if "error" in res:
-                    detail = f"External: {res['error']['message'] if 'message' in res['error'] else res['error']}"
-            except Exception:
-                detail = f"External: {e}"
+        payload = await read_aiohttp_error_payload(r) if r is not None else None
         raise HTTPException(
             status_code=r.status if r else 500,
-            detail=detail if detail else "Open WebUI: Server Connection Error",
+            detail=build_error_detail(payload, e),
         )
     finally:
         if not streaming and session:

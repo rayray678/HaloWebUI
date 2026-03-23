@@ -202,20 +202,35 @@ class ChatReaction(Base):
 #     count: int
 
 
+def normalize_chat_payload(chat: Optional[dict]) -> dict:
+    """Drop the legacy top-level messages copy when history is the source of truth."""
+    if not isinstance(chat, dict):
+        return {} if chat is None else chat
+
+    normalized = dict(chat)
+    history = normalized.get("history")
+
+    if isinstance(history, dict) and "messages" in history:
+        normalized.pop("messages", None)
+
+    return normalized
+
+
 class ChatTable:
     def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
         with get_db() as db:
+            normalized_chat = normalize_chat_payload(form_data.chat)
             id = str(uuid.uuid4())
             chat = ChatModel(
                 **{
                     "id": id,
                     "user_id": user_id,
                     "title": (
-                        form_data.chat["title"]
-                        if "title" in form_data.chat
+                        normalized_chat["title"]
+                        if "title" in normalized_chat
                         else "New Chat"
                     ),
-                    "chat": form_data.chat,
+                    "chat": normalized_chat,
                     "created_at": int(time.time()),
                     "updated_at": int(time.time()),
                 }
@@ -231,17 +246,18 @@ class ChatTable:
         self, user_id: str, form_data: ChatImportForm
     ) -> Optional[ChatModel]:
         with get_db() as db:
+            normalized_chat = normalize_chat_payload(form_data.chat)
             id = str(uuid.uuid4())
             chat = ChatModel(
                 **{
                     "id": id,
                     "user_id": user_id,
                     "title": (
-                        form_data.chat["title"]
-                        if "title" in form_data.chat
+                        normalized_chat["title"]
+                        if "title" in normalized_chat
                         else "New Chat"
                     ),
-                    "chat": form_data.chat,
+                    "chat": normalized_chat,
                     "meta": form_data.meta,
                     "pinned": form_data.pinned,
                     "folder_id": form_data.folder_id,
@@ -261,10 +277,13 @@ class ChatTable:
     ) -> Optional[ChatModel]:
         try:
             with get_db() as db:
+                normalized_chat = normalize_chat_payload(chat)
                 chat_item = db.get(Chat, id)
-                chat_item.chat = chat
+                chat_item.chat = normalized_chat
                 flag_modified(chat_item, "chat")
-                chat_item.title = chat["title"] if "title" in chat else "New Chat"
+                chat_item.title = (
+                    normalized_chat["title"] if "title" in normalized_chat else "New Chat"
+                )
                 chat_item.updated_at = int(time.time())
                 db.commit()
                 db.refresh(chat_item)
@@ -390,12 +409,13 @@ class ChatTable:
             if chat.share_id:
                 return self.get_chat_by_id_and_user_id(chat.share_id, "shared")
             # Create a new chat with the same data, but with a new ID
+            normalized_chat = normalize_chat_payload(chat.chat)
             shared_chat = ChatModel(
                 **{
                     "id": str(uuid.uuid4()),
                     "user_id": f"shared-{chat_id}",
                     "title": chat.title,
-                    "chat": chat.chat,
+                    "chat": normalized_chat,
                     "created_at": chat.created_at,
                     "updated_at": int(time.time()),
                 }
@@ -426,7 +446,7 @@ class ChatTable:
                     return self.insert_shared_chat_by_chat_id(chat_id)
 
                 shared_chat.title = chat.title
-                shared_chat.chat = chat.chat
+                shared_chat.chat = normalize_chat_payload(chat.chat)
 
                 shared_chat.updated_at = int(time.time())
                 db.commit()
@@ -720,9 +740,14 @@ class ChatTable:
                         | text(
                             """
                             EXISTS (
-                                SELECT 1 
-                                FROM json_each(Chat.chat, '$.messages') AS message 
-                                WHERE LOWER(message.value->>'content') LIKE '%' || :search_text || '%'
+                                SELECT 1
+                                FROM json_each(Chat.chat, '$.history.messages') AS message
+                                WHERE LOWER(COALESCE(message.value->>'content', '')) LIKE '%' || :search_text || '%'
+                            )
+                            OR EXISTS (
+                                SELECT 1
+                                FROM json_each(Chat.chat, '$.messages') AS message
+                                WHERE LOWER(COALESCE(message.value->>'content', '')) LIKE '%' || :search_text || '%'
                             )
                             """
                         )
@@ -770,8 +795,13 @@ class ChatTable:
                             """
                             EXISTS (
                                 SELECT 1
-                                FROM json_array_elements(Chat.chat->'messages') AS message
-                                WHERE LOWER(message->>'content') LIKE '%' || :search_text || '%'
+                                FROM json_each(COALESCE(Chat.chat->'history'->'messages', '{}'::json)) AS message(key, value)
+                                WHERE LOWER(COALESCE(message.value->>'content', '')) LIKE '%' || :search_text || '%'
+                            )
+                            OR EXISTS (
+                                SELECT 1
+                                FROM json_array_elements(COALESCE(Chat.chat->'messages', '[]'::json)) AS message
+                                WHERE LOWER(COALESCE(message->>'content', '')) LIKE '%' || :search_text || '%'
                             )
                             """
                         )

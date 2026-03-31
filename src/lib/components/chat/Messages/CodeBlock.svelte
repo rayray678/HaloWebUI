@@ -79,10 +79,16 @@
 	let copied = false;
 	let saved = false;
 	let mermaidThemeObserver: MutationObserver | null = null;
+	let heightObserver: ResizeObserver | null = null;
 	const PYODIDE_DISABLED_MESSAGE = 'Pyodide is disabled in this build.';
 	let showPyodideConsent = false;
 	let pendingPyodideCode = '';
 	let pyodideConsentPackages: string[] = [];
+
+	const MAX_COLLAPSED_HEIGHT = 350;
+	let codeWrapperEl: HTMLDivElement = null as unknown as HTMLDivElement;
+	let codeNaturalHeight = collapsed ? MAX_COLLAPSED_HEIGHT + 1 : 0;
+	$: needsCollapse = codeNaturalHeight > MAX_COLLAPSED_HEIGHT;
 
 	const collapseCodeBlock = () => {
 		collapsed = !collapsed;
@@ -439,10 +445,21 @@
 			attributeFilter: ['class'],
 			attributes: true
 		});
+
+		await tick();
+		if (codeWrapperEl) {
+			heightObserver = new ResizeObserver(() => {
+				if (codeWrapperEl) {
+					codeNaturalHeight = codeWrapperEl.scrollHeight;
+				}
+			});
+			heightObserver.observe(codeWrapperEl);
+		}
 	});
 
 	onDestroy(() => {
 		mermaidThemeObserver?.disconnect();
+		heightObserver?.disconnect();
 		if (pyodideWorker) {
 			pyodideWorker.terminate();
 		}
@@ -451,7 +468,7 @@
 
 <div>
 	<div
-		class="relative {className} flex flex-col rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 my-2 overflow-hidden"
+		class="relative {className} group/codeblock flex flex-col rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 my-2 overflow-hidden"
 		dir="ltr"
 	>
 		{#if lang === 'mermaid'}
@@ -466,7 +483,7 @@
 			{/if}
 		{:else}
 			<div
-				class="group sticky top-0 left-0 right-0 z-10 flex items-center justify-between px-3 py-1.5 min-h-[36px] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 cursor-pointer"
+				class="sticky top-0 left-0 right-0 z-10 flex items-center justify-between px-3 py-1.5 min-h-[36px] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 cursor-pointer"
 				on:click={collapseCodeBlock}
 			>
 				<div class="flex items-center gap-2">
@@ -478,7 +495,7 @@
 					</span>
 				</div>
 				<div
-					class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+					class="flex items-center gap-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity duration-200"
 					on:click|stopPropagation
 				>
 					{#if ($config?.features?.enable_code_execution ?? true) && (lang.toLowerCase() === 'python' || lang.toLowerCase() === 'py' || (lang === '' && checkPythonCode(code)))}
@@ -670,36 +687,45 @@
 			{/if}
 
 			<div
+				bind:this={codeWrapperEl}
 				class="language-{lang} {editorClassName
 					? editorClassName
 					: executing || stdout || stderr || result
 						? ''
-						: ''} overflow-hidden font-mono"
+						: ''} font-mono"
+				style={collapsed && needsCollapse ? `max-height: ${MAX_COLLAPSED_HEIGHT}px; overflow-y: auto;` : ''}
 			>
-				{#if !collapsed}
-					<CodeEditor
-						value={code}
-						{id}
-						{lang}
-						onSave={() => {
-							saveCode();
-						}}
-						onChange={(value) => {
-							_code = value;
-						}}
-					/>
-				{:else}
-					<div
-						class="bg-gray-50 dark:bg-gray-950 text-gray-400 dark:text-gray-500 py-2 px-4 flex flex-col gap-2 text-sm text-center border-t border-gray-100 dark:border-gray-900"
-					>
-						<span class="italic">
-							{$i18n.t('{{COUNT}} hidden lines', {
-								COUNT: code.split('\n').length
-							})}
-						</span>
-					</div>
-				{/if}
+				<CodeEditor
+					value={code}
+					{id}
+					{lang}
+					onSave={() => {
+						saveCode();
+					}}
+					onChange={(value) => {
+						_code = value;
+					}}
+				/>
 			</div>
+
+			{#if needsCollapse}
+				<button
+					class="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-200 dark:border-gray-800 transition-colors"
+					on:click={collapseCodeBlock}
+				>
+					{#if collapsed}
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
+							<path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+						</svg>
+							{$i18n.t('Expand')} ({code.split('\n').length})
+					{:else}
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
+							<path fill-rule="evenodd" d="M14.78 11.78a.75.75 0 0 1-1.06 0L10 8.06l-3.72 3.72a.75.75 0 0 1-1.06-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
+						</svg>
+						{$i18n.t('Collapse')}
+					{/if}
+				</button>
+			{/if}
 
 			{#if !collapsed}
 				<div

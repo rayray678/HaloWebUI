@@ -1051,6 +1051,7 @@
 										{history}
 										content={message.content}
 										streaming={!message.done}
+										{isLastMessage}
 										sources={message.sources}
 										floatingButtons={message?.done &&
 											!readOnly &&

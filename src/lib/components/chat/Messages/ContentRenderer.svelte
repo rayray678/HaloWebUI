@@ -30,6 +30,7 @@
 	export let floatingButtons = true;
 	export let actions = [];
 	export let streaming = false;
+	export let isLastMessage = false;
 
 	export let onSourceClick = () => {};
 	export let onTaskClick = () => {};
@@ -41,19 +42,34 @@
 	let currentTransitionMode = 'none';
 
 	// Long content truncation
-	const MAX_CONTENT_HEIGHT = 1500;
+	const MAX_CONTENT_HEIGHT = 2000;
 	let isExpanded = false;
 	let needsTruncation = false;
 	let resizeObserver;
+	let shouldCollapseHistoricalLongResponses = false;
+
+	$: shouldCollapseHistoricalLongResponses =
+		!isLastMessage && ($settings?.collapseHistoricalLongResponses ?? true);
 
 	function checkTruncation() {
-		if (!contentContainerElement || streaming || isExpanded) return;
+		if (!contentContainerElement) return;
+		if (streaming || isExpanded || !shouldCollapseHistoricalLongResponses) {
+			needsTruncation = false;
+			return;
+		}
 		needsTruncation = contentContainerElement.scrollHeight > MAX_CONTENT_HEIGHT;
 	}
 
-	$: if (!streaming && contentContainerElement) {
-		// Re-check when streaming ends
-		tick().then(checkTruncation);
+	$: if (contentContainerElement) {
+		isLastMessage;
+		shouldCollapseHistoricalLongResponses;
+
+		if (streaming) {
+			needsTruncation = false;
+		} else {
+			// Re-check when streaming ends or truncation rules change
+			tick().then(checkTruncation);
+		}
 	}
 
 	$: currentTransitionMode = resolveChatTransitionMode($settings);

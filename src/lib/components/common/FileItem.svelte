@@ -168,7 +168,7 @@
 	{#if dismissible}
 		<div class=" absolute -top-1 -right-1">
 			<button
-				class=" bg-white text-black border border-gray-50 rounded-full group-hover:visible invisible transition"
+				class="bg-gray-900/70 dark:bg-gray-700/90 text-white border border-white/20 dark:border-gray-500/30 rounded-full group-hover:visible invisible transition backdrop-blur-sm"
 				type="button"
 				on:click|stopPropagation={() => {
 					dispatch('dismiss');

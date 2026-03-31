@@ -59,6 +59,7 @@
 	let copyFormatted = false;
 
 	let collapseCodeBlocks = false;
+	let collapseHistoricalLongResponses = true;
 	let expandDetails = false;
 
 	let imageCompression = false;
@@ -83,6 +84,11 @@
 	const toggleExpandDetails = () => {
 		expandDetails = !expandDetails;
 		saveSettings({ expandDetails });
+	};
+
+	const toggleCollapseHistoricalLongResponses = () => {
+		collapseHistoricalLongResponses = !collapseHistoricalLongResponses;
+		saveSettings({ collapseHistoricalLongResponses });
 	};
 
 	const toggleCollapseCodeBlocks = () => {
@@ -327,6 +333,7 @@
 		copyFormatted = $settings.copyFormatted ?? false;
 
 		collapseCodeBlocks = $settings.collapseCodeBlocks ?? false;
+		collapseHistoricalLongResponses = $settings.collapseHistoricalLongResponses ?? true;
 		expandDetails = $settings.expandDetails ?? false;
 
 		landingPageMode = $settings.landingPageMode ?? '';
@@ -785,7 +792,31 @@
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
-					<div class=" self-center text-xs">{$i18n.t('Always Expand Details')}</div>
+					<div class=" self-center text-xs">
+						{$i18n.t('Collapse Historical Long Responses')}
+					</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleCollapseHistoricalLongResponses();
+						}}
+						type="button"
+					>
+						{#if collapseHistoricalLongResponses === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">
+						{$i18n.t('Expand Tool and Detail Blocks by Default')}
+					</div>
 
 					<button
 						class="p-1 px-3 text-xs flex rounded-sm transition"

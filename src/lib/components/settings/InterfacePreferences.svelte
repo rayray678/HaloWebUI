@@ -117,6 +117,7 @@
 	let showChatTitleInTab = true;
 	let textScale: number | null = null;
 	let collapseCodeBlocks = false;
+	let collapseHistoricalLongResponses = true;
 	let expandDetails = false;
 
 	// Chat behavior
@@ -234,6 +235,7 @@
 			enableMessageQueue: boolean;
 			temporaryChatByDefault: boolean;
 			collapseCodeBlocks: boolean;
+			collapseHistoricalLongResponses: boolean;
 			expandDetails: boolean;
 			insertSuggestionPrompt: boolean;
 			keepFollowUpPrompts: boolean;
@@ -560,6 +562,7 @@
 			enableMessageQueue,
 			temporaryChatByDefault,
 			collapseCodeBlocks,
+			collapseHistoricalLongResponses,
 			expandDetails,
 			insertSuggestionPrompt,
 			keepFollowUpPrompts,
@@ -635,6 +638,7 @@
 		enableMessageQueue = snapshot.enableMessageQueue;
 		temporaryChatByDefault = snapshot.temporaryChatByDefault;
 		collapseCodeBlocks = snapshot.collapseCodeBlocks;
+		collapseHistoricalLongResponses = snapshot.collapseHistoricalLongResponses;
 		expandDetails = snapshot.expandDetails;
 		insertSuggestionPrompt = snapshot.insertSuggestionPrompt;
 		keepFollowUpPrompts = snapshot.keepFollowUpPrompts;
@@ -701,6 +705,7 @@
 		transitionMode;
 		enableAutoScrollOnStreaming;
 		collapseCodeBlocks;
+		collapseHistoricalLongResponses;
 		expandDetails;
 		insertSuggestionPrompt;
 		keepFollowUpPrompts;
@@ -994,6 +999,7 @@
 				enableMessageQueue,
 				temporaryChatByDefault,
 				collapseCodeBlocks,
+				collapseHistoricalLongResponses,
 				expandDetails,
 				insertSuggestionPrompt,
 				keepFollowUpPrompts,
@@ -1176,6 +1182,7 @@
 		globalSystemPrompt = $settings?.system ?? '';
 
 		collapseCodeBlocks = $settings?.collapseCodeBlocks ?? false;
+		collapseHistoricalLongResponses = $settings?.collapseHistoricalLongResponses ?? true;
 		expandDetails = $settings?.expandDetails ?? false;
 
 		landingPageMode = $settings?.landingPageMode ?? '';
@@ -2104,7 +2111,15 @@
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">
 											<div class="text-sm font-medium">
-												{$i18n.t('Always Expand Details')}
+												{$i18n.t('Collapse Historical Long Responses')}
+											</div>
+											<Switch
+												bind:state={collapseHistoricalLongResponses}
+											/>
+										</div>
+										<div class="flex items-center justify-between glass-item px-4 py-3">
+											<div class="text-sm font-medium">
+												{$i18n.t('Expand Tool and Detail Blocks by Default')}
 											</div>
 											<Switch
 												bind:state={expandDetails}

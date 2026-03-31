@@ -490,7 +490,22 @@ def _backup_database(engine: Engine, url: URL, detection: DetectionResult) -> Pa
         str(backup_path),
         url.render_as_string(hide_password=False),
     ]
-    subprocess.run(cmd, check=True, env=os.environ.copy(), capture_output=True)
+    try:
+        subprocess.run(cmd, check=True, env=os.environ.copy(), capture_output=True)
+    except FileNotFoundError as exc:
+        raise RuntimeMigrationError(
+            "检测到 PostgreSQL 数据库并准备自动迁移，但当前镜像缺少 `pg_dump`，"
+            "无法先创建安全备份。请改用包含 PostgreSQL client 的镜像后重试。"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore").strip()
+        detail = f" pg_dump stderr: {stderr}" if stderr else ""
+        raise RuntimeMigrationError(
+            "检测到 PostgreSQL 数据库并准备自动迁移，但执行 `pg_dump` 备份失败，"
+            "已阻止启动以避免无备份迁移。常见原因是数据库权限不足，"
+            "或容器内 `pg_dump` 版本低于 PostgreSQL 服务端主版本。"
+            f"{detail}"
+        ) from exc
     return backup_path
 
 

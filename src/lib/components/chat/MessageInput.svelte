@@ -674,11 +674,11 @@
 								dir={$settings?.chatDirection ?? 'auto'}
 							>
 								{#if files.length > 0}
-									<div class="mx-auto max-w-4xl px-2.5 mb-2 flex items-center flex-wrap gap-2">
+									<div class="px-2.5 mt-0.5 mb-1.5 pt-1.5 flex items-end gap-2 overflow-x-auto scrollbar-none">
 										{#each files as file, fileIdx}
 											{#if file.type === 'image'}
-												<div class=" relative group">
-													<div class="relative flex items-center">
+												<div class="relative group shrink-0">
+													<div class="relative flex items-center rounded-xl ring-1 ring-gray-200/60 dark:ring-white/10">
 														<Image
 															src={file.url}
 															alt="input"
@@ -710,9 +710,9 @@
 															</Tooltip>
 														{/if}
 													</div>
-													<div class=" absolute -top-1 -right-1">
+													<div class=" absolute -top-1.5 -right-1.5">
 														<button
-															class=" bg-white text-black border border-white rounded-full group-hover:visible invisible transition"
+															class="bg-gray-900/70 dark:bg-gray-700/90 text-white border border-white/20 dark:border-gray-500/30 rounded-full group-hover:visible invisible transition backdrop-blur-sm p-px"
 															type="button"
 															on:click={() => {
 																files.splice(fileIdx, 1);
@@ -723,7 +723,7 @@
 																xmlns="http://www.w3.org/2000/svg"
 																viewBox="0 0 20 20"
 																fill="currentColor"
-																class="size-4"
+																class="size-3.5"
 															>
 																<path
 																	d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
@@ -734,6 +734,7 @@
 												</div>
 											{:else}
 												<FileItem
+													className="w-60 shrink-0"
 													item={file}
 													name={file.name}
 													type={file.type}

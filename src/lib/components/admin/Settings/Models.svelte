@@ -2,6 +2,7 @@
 	import { marked } from 'marked';
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
+	import Sortable from 'sortablejs';
 
 	import { onMount, getContext, tick } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -167,6 +168,25 @@
 	let expandedGroupsInitialized = false;
 
 	let listContainerEl: HTMLDivElement | null = null;
+	let groupListEl: HTMLDivElement | null = null;
+	let groupSortable: Sortable | null = null;
+	let groupStats: Map<string, { count: number; enabledCount: number; hiddenCount: number; publicCount: number; privateCount: number; unsetCount: number }> = new Map();
+
+	const GROUP_ORDER_KEY = 'admin-models-group-order';
+	let savedGroupOrder: string[] | null = (() => {
+		try {
+			const raw = localStorage.getItem(GROUP_ORDER_KEY);
+			return raw ? JSON.parse(raw) : null;
+		} catch { return null; }
+	})();
+
+	const saveGroupOrder = (order: string[]) => {
+		try {
+			savedGroupOrder = order;
+			localStorage.setItem(GROUP_ORDER_KEY, JSON.stringify(order));
+		} catch { /* ignore quota errors */ }
+	};
+
 	let listHeight = 400;
 	let resizeObserver: ResizeObserver | null = null;
 
@@ -394,24 +414,41 @@
 		}
 		grouped = _grouped;
 
-		const _keys = Array.from(_grouped.keys());
-		_keys.sort((a, b) => {
+		// --- Apply custom order, falling back to default for unknown keys ---
+		const allKeys = new Set(_grouped.keys());
+		const ordered: string[] = [];
+
+		if (savedGroupOrder) {
+			for (const k of savedGroupOrder) {
+				if (allKeys.has(k)) {
+					ordered.push(k);
+					allKeys.delete(k);
+				}
+			}
+		}
+
+		const remaining = Array.from(allKeys);
+		remaining.sort((a, b) => {
 			const da = _grouped.get(a)?.models?.length ?? 0;
 			const db = _grouped.get(b)?.models?.length ?? 0;
 			if (db !== da) return db - da;
 			return String(a).localeCompare(String(b));
 		});
-		groupKeys = _keys;
+		ordered.push(...remaining);
+
+		groupKeys = ordered;
 
 		// Auto-expand groups when searching
 		if (searchValue.trim()) {
-			for (const key of _keys) expandedGroups[key] = true;
+			for (const key of ordered) expandedGroups[key] = true;
 			expandedGroups = { ...expandedGroups };
 		}
 
+		// Build groupStats map
+		const _stats = new Map<string, { count: number; enabledCount: number; hiddenCount: number; publicCount: number; privateCount: number; unsetCount: number }>();
 		// Build rows
 		const out: Row[] = [];
-		for (const key of _keys) {
+		for (const key of ordered) {
 			const ms = _grouped.get(key)?.models ?? [];
 			let enabledCount = 0, hiddenCount = 0, publicCount = 0, privateCount = 0, unsetCount = 0;
 			for (const m of ms) {
@@ -422,11 +459,13 @@
 				else if (v === 'private') privateCount++;
 				else unsetCount++;
 			}
+			_stats.set(key, { count: ms.length, enabledCount, hiddenCount, publicCount, privateCount, unsetCount });
 			out.push({ type: 'group', key, name: key, count: ms.length, enabledCount, hiddenCount, publicCount, privateCount, unsetCount });
 			if (expandedGroups[key]) {
 				for (const m of ms) out.push({ type: 'model', groupKey: key, model: m });
 			}
 		}
+		groupStats = _stats;
 		rows = out;
 	}
 
@@ -636,6 +675,45 @@
 		expandedGroups = { ...expandedGroups };
 	};
 
+	let prevGroupKeySet = '';
+	const initGroupSortable = () => {
+		if (groupSortable) {
+			groupSortable.destroy();
+			groupSortable = null;
+		}
+		if (!groupListEl) return;
+
+		groupSortable = Sortable.create(groupListEl, {
+			animation: 150,
+			handle: '.group-drag-handle',
+			draggable: '.group-sortable-item',
+			ghostClass: 'opacity-30',
+			chosenClass: 'shadow-lg',
+			onEnd: () => {
+				const items = groupListEl!.querySelectorAll('.group-sortable-item');
+				const newOrder = Array.from(items).map(
+					(el) => (el as HTMLElement).dataset.groupKey!
+				);
+				saveGroupOrder(newOrder);
+				groupKeys = newOrder;
+			}
+		});
+	};
+
+	// Reinitialize sortable only when the set of group keys changes (not just order)
+	$: {
+		const keySet = [...groupKeys].sort().join('\0');
+		if (keySet !== prevGroupKeySet) {
+			prevGroupKeySet = keySet;
+			tick().then(() => initGroupSortable());
+		}
+	}
+
+	// Disable sortable during search
+	$: if (groupSortable) {
+		groupSortable.option('disabled', !!searchValue.trim());
+	}
+
 	const handleEditorSubmit = (m: any) => {
 		upsertModelHandler(m);
 		selectedModelId = null;
@@ -674,6 +752,7 @@
 			window.removeEventListener('keyup', onKeyUp);
 			if (resizeObserver && listContainerEl) resizeObserver.unobserve(listContainerEl);
 			resizeObserver = null;
+			if (groupSortable) groupSortable.destroy();
 		};
 	});
 </script>
@@ -1109,28 +1188,55 @@
 									</div>
 								</div>
 							{:else}
-								<div class="flex flex-col py-1">
-									{#each rows as item}
-										{#if item.type === 'group'}
-											{@const groupModel = (grouped.get(item.key)?.models ?? [])[0]}
-											{@const groupIds = getGroupModelIds(item.key)}
-											{@const selectedInGroup = groupIds.filter(id => selectedIds.has(id)).length}
+								<div class="flex flex-col py-1" bind:this={groupListEl}>
+									{#each groupKeys as key (key)}
+										{@const groupData = grouped.get(key)}
+										{@const groupModel = (groupData?.models ?? [])[0]}
+										{@const ms = groupData?.models ?? []}
+										{@const stats = groupStats.get(key)}
+										{@const groupIds = getGroupModelIds(key)}
+										{@const selectedInGroup = groupIds.filter(id => selectedIds.has(id)).length}
+										<div class="group-sortable-item" data-group-key={key}>
 											<div class="px-2 py-1.5">
 												<div
 													class="flex items-center justify-between gap-2 w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30 hover:bg-gray-100/60 dark:hover:bg-gray-900/40 transition cursor-pointer"
-													on:click={() => toggleGroupExpanded(item.key)}
+													on:click={() => toggleGroupExpanded(key)}
 													role="button"
 													tabindex="0"
-													on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGroupExpanded(item.key); }}
+													on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGroupExpanded(key); }}
 												>
 													<div class="flex items-center gap-2 min-w-0">
+														{#if !searchValue.trim()}
+															<!-- svelte-ignore a11y-click-events-have-key-events -->
+															<button
+																class="group-drag-handle flex items-center justify-center w-6 h-6 -ml-1
+																	rounded-lg cursor-grab active:cursor-grabbing
+																	text-gray-300 dark:text-gray-600
+																	hover:text-gray-500 dark:hover:text-gray-400
+																	hover:bg-gray-100/80 dark:hover:bg-gray-800/60
+																	transition-all duration-150"
+																on:click|stopPropagation
+																type="button"
+																aria-label={$i18n.t('Drag to reorder')}
+															>
+																<svg class="size-3.5" viewBox="0 0 16 16" fill="currentColor">
+																	<circle cx="5" cy="3" r="1.5"/>
+																	<circle cx="11" cy="3" r="1.5"/>
+																	<circle cx="5" cy="8" r="1.5"/>
+																	<circle cx="11" cy="8" r="1.5"/>
+																	<circle cx="5" cy="13" r="1.5"/>
+																	<circle cx="11" cy="13" r="1.5"/>
+																</svg>
+															</button>
+														{/if}
+
 														{#if selectMode}
 														<!-- svelte-ignore a11y-click-events-have-key-events -->
 														<input
 															type="checkbox"
 															class="accent-emerald-600"
-															checked={selectedInGroup === item.count && item.count > 0}
-															on:change|stopPropagation={() => toggleSelectGroup(item.key)}
+															checked={selectedInGroup === (stats?.count ?? 0) && (stats?.count ?? 0) > 0}
+															on:change|stopPropagation={() => toggleSelectGroup(key)}
 															on:click|stopPropagation
 															title={$i18n.t('Select')}
 														/>
@@ -1140,20 +1246,20 @@
 															<ModelIcon
 																src={groupModel.connection_icon}
 																alt="connection icon"
-																className="rounded-xl size-7 shrink-0"
+																className="rounded-xl size-8 shrink-0"
 															/>
 														{:else}
-															<LetterAvatar name={item.name} size="size-7" />
+															<LetterAvatar name={key} size="size-8" />
 														{/if}
 
 														<span class="font-semibold truncate max-w-[40vw]">
-															{item.name === 'Unknown' ? $i18n.t('Unknown') : item.name}
+															{key === 'Unknown' ? $i18n.t('Unknown') : key}
 														</span>
 
 														<span
 															class="text-xs text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-lg bg-gray-100/80 dark:bg-gray-800/60 shrink-0"
 														>
-															{item.count}
+															{stats?.count ?? 0}
 														</span>
 
 														{#if selectedInGroup > 0}
@@ -1166,131 +1272,133 @@
 													</div>
 
 													<div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 shrink-0">
-														<!-- Only show deviation states -->
-														{#if item.enabledCount < item.count}
+														{#if (stats?.enabledCount ?? 0) < (stats?.count ?? 0)}
 															<span class="text-amber-600 dark:text-amber-400" title={$i18n.t('Disabled')}>
-																{item.count - item.enabledCount} {$i18n.t('Disabled')}
+																{(stats?.count ?? 0) - (stats?.enabledCount ?? 0)} {$i18n.t('Disabled')}
 															</span>
 														{/if}
 
-														{#if item.hiddenCount > 0}
+														{#if (stats?.hiddenCount ?? 0) > 0}
 															<span title={$i18n.t('Hidden')}>
-																{item.hiddenCount} {$i18n.t('Hidden')}
+																{stats?.hiddenCount} {$i18n.t('Hidden')}
 															</span>
 														{/if}
 
-														{#if item.publicCount > 0 && item.privateCount > 0}
+														{#if (stats?.publicCount ?? 0) > 0 && (stats?.privateCount ?? 0) > 0}
 															<span class="text-blue-600 dark:text-blue-400" title={$i18n.t('Public')}>
-																{item.publicCount} {$i18n.t('Public')}
+																{stats?.publicCount} {$i18n.t('Public')}
 															</span>
 															<span class="text-purple-600 dark:text-purple-400" title={$i18n.t('Private')}>
-																{item.privateCount} {$i18n.t('Private')}
+																{stats?.privateCount} {$i18n.t('Private')}
 															</span>
 														{/if}
 
 														<ChevronDown
-															className={`size-4 transition-transform will-change-transform ${expandedGroups[item.key] ? 'rotate-180' : ''}`}
+															className={`size-4 transition-transform will-change-transform ${expandedGroups[key] ? 'rotate-180' : ''}`}
 														/>
 													</div>
 												</div>
 											</div>
-										{:else}
-											{@const m = item.model}
-											{@const visibility = getVisibilityState(m)}
-											<div
-												class="flex items-center justify-between gap-3 px-3 py-2 mx-2 pl-10 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition {m
-													?.meta?.hidden
-													? 'opacity-60'
-													: ''}"
-											>
-												<div class="flex items-center gap-3 min-w-0 flex-1">
-													{#if selectMode}
-													<input
-														type="checkbox"
-														class="accent-emerald-600"
-														checked={selectedIds.has(m.id)}
-														on:click={(e) => toggleSelect(m.id, e)}
-													/>
-													{/if}
 
-													<ModelIcon
-														src={m?.meta?.profile_image_url ?? '/static/favicon.png'}
-														alt="model icon"
-														className="rounded-xl size-8 shrink-0"
-													/>
-
-													<button
-														class="min-w-0 text-left flex-1"
-														type="button"
-														on:click={() => {
-															selectedModelId = m.id;
-														}}
+											{#if expandedGroups[key]}
+												{#each ms as m (m.id)}
+													{@const visibility = getVisibilityState(m)}
+													<div
+														class="flex items-center justify-between gap-3 px-3 py-2 mx-2 pl-10 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition {m
+															?.meta?.hidden
+															? 'opacity-60'
+															: ''}"
 													>
-														<Tooltip
-															content={marked.parse(
-																!!m?.meta?.description
-																	? m?.meta?.description
-																	: m?.ollama?.digest
-																		? `${m?.ollama?.digest} **(${m?.ollama?.modified_at})**`
-																		: m.id
-															)}
-															className="w-fit"
-															placement="top-start"
-														>
-															<div class="font-semibold line-clamp-1">
-																{getModelChatDisplayName(m)}
-															</div>
-														</Tooltip>
-														<div class="text-xs text-gray-500 line-clamp-1">
-															{m?.originalId ?? m?.original_id ?? m.id}
+														<div class="flex items-center gap-3 min-w-0 flex-1">
+															{#if selectMode}
+															<input
+																type="checkbox"
+																class="accent-emerald-600"
+																checked={selectedIds.has(m.id)}
+																on:click={(e) => toggleSelect(m.id, e)}
+															/>
+															{/if}
+
+															<ModelIcon
+																src={m?.meta?.profile_image_url ?? '/static/favicon.png'}
+																alt="model icon"
+																className="rounded-xl size-8 shrink-0"
+															/>
+
+															<button
+																class="min-w-0 text-left flex-1"
+																type="button"
+																on:click={() => {
+																	selectedModelId = m.id;
+																}}
+															>
+																<Tooltip
+																	content={marked.parse(
+																		!!m?.meta?.description
+																			? m?.meta?.description
+																			: m?.ollama?.digest
+																				? `${m?.ollama?.digest} **(${m?.ollama?.modified_at})**`
+																				: m.id
+																	)}
+																	className="w-fit"
+																	placement="top-start"
+																>
+																	<div class="font-semibold line-clamp-1">
+																		{getModelChatDisplayName(m)}
+																	</div>
+																</Tooltip>
+																<div class="text-xs text-gray-500 line-clamp-1">
+																	{m?.originalId ?? m?.original_id ?? m.id}
+																</div>
+															</button>
 														</div>
-													</button>
-												</div>
 
-												<div class="flex items-center gap-2 shrink-0">
-													<button
-														class="text-xs px-2 py-1 rounded-lg border border-gray-200/60 dark:border-gray-800 hover:bg-black/5 dark:hover:bg-white/5 transition"
-														type="button"
-														on:click={() =>
-															setModelVisibility(m, visibility === 'public' ? 'private' : 'public')}
-													>
-														{visibility === 'public'
-															? $i18n.t('Public')
-															: visibility === 'private'
-																? $i18n.t('Private')
-																: $i18n.t('Default')}
-													</button>
+														<div class="flex items-center gap-2 shrink-0">
+															<button
+																class="text-xs px-2 py-1 rounded-lg border border-gray-200/60 dark:border-gray-800 hover:bg-black/5 dark:hover:bg-white/5 transition"
+																type="button"
+																on:click={() =>
+																	setModelVisibility(m, visibility === 'public' ? 'private' : 'public')}
+															>
+																{visibility === 'public'
+																	? $i18n.t('Public')
+																	: visibility === 'private'
+																		? $i18n.t('Private')
+																		: $i18n.t('Default')}
+															</button>
 
-													<Tooltip
-														content={(m?.is_active ?? true)
-															? $i18n.t('Enabled')
-															: $i18n.t('Disabled')}
-													>
-														<Switch
-															state={m?.is_active ?? true}
-															on:change={(e) => {
-																setModelActive(m, e.detail);
-															}}
-														/>
-													</Tooltip>
+															<Tooltip
+																content={(m?.is_active ?? true)
+																	? $i18n.t('Enabled')
+																	: $i18n.t('Disabled')}
+															>
+																<Switch
+																	state={m?.is_active ?? true}
+																	on:change={(e) => {
+																		setModelActive(m, e.detail);
+																	}}
+																/>
+															</Tooltip>
 
-													<ModelMenu
-														user={$user}
-														model={m}
-														exportHandler={() => exportModelHandler(m)}
-														hideHandler={() => setModelHidden(m, !(m?.meta?.hidden ?? false))}
-														onClose={() => {}}
-													>
-														<button
-															class="self-center w-fit text-sm p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
-															type="button"
-														>
-															<EllipsisHorizontal className="size-5" />
-														</button>
-													</ModelMenu>
-												</div>
-											</div>
-										{/if}
+															<ModelMenu
+																user={$user}
+																model={m}
+																exportHandler={() => exportModelHandler(m)}
+																hideHandler={() => setModelHidden(m, !(m?.meta?.hidden ?? false))}
+																onClose={() => {}}
+															>
+																<button
+																	class="self-center w-fit text-sm p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+																	type="button"
+																>
+																	<EllipsisHorizontal className="size-5" />
+																</button>
+															</ModelMenu>
+														</div>
+													</div>
+												{/each}
+											{/if}
+										</div>
 									{/each}
 								</div>
 							{/if}

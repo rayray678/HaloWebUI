@@ -206,6 +206,7 @@ type Settings = {
 	insertFollowUpPrompt?: boolean;
 	regenerateMenu?: boolean;
 	collapseCodeBlocks?: boolean;
+	collapseHistoricalLongResponses?: boolean;
 	expandDetails?: boolean;
 	renderMarkdownInPreviews?: boolean;
 	displayMultiModelResponsesInTabs?: boolean;

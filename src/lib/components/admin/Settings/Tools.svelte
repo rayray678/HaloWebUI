@@ -52,7 +52,7 @@
 
 	const tabMeta: Record<string, { label: string; description: string; badgeColor: string; iconColor: string }> = {
 		native:    { label: '内置功能',       description: '管理工具调用模式、内置搜索、知识库、图像生成等原生工具开关。', badgeColor: 'bg-emerald-50 dark:bg-emerald-950/30', iconColor: 'text-emerald-500 dark:text-emerald-400' },
-		mcp:       { label: 'MCP 服务器',     description: '通过 MCP 协议连接外部工具服务器，支持 HTTP 与 stdio 传输。', badgeColor: 'bg-violet-50 dark:bg-violet-950/30',  iconColor: 'text-violet-500 dark:text-violet-400' },
+		mcp:       { label: 'MCP 服务器',     description: '通过 MCP 协议连接外部工具服务器，支持 HTTP（优先 Streamable HTTP，自动兼容旧版 HTTP+SSE）与 stdio 传输。', badgeColor: 'bg-violet-50 dark:bg-violet-950/30',  iconColor: 'text-violet-500 dark:text-violet-400' },
 		workspace: { label: '工作空间工具',   description: '管理自定义 Python 工具，支持导入、导出和阀门配置。',           badgeColor: 'bg-blue-50 dark:bg-blue-950/30',    iconColor: 'text-blue-500 dark:text-blue-400' },
 		openapi:   { label: 'OpenAPI 服务器', description: '连接兼容 OpenAPI 规范的工具服务器，适用于企业级集成。',       badgeColor: 'bg-orange-50 dark:bg-orange-950/30', iconColor: 'text-orange-500 dark:text-orange-400' }
 	};
@@ -1047,11 +1047,11 @@
 									<div class="text-xs font-medium text-blue-700 dark:text-blue-300">
 										{$i18n.t('关于 MCP')}
 									</div>
-									<div class="text-xs leading-relaxed text-blue-600 dark:text-blue-400 mt-0.5">
-										{$i18n.t(
-											'MCP（模型上下文协议）是一个用于 LLM 与外部工具通信的开放标准。当前支持 HTTP 与 stdio 两种传输方式。'
-										)}
-									</div>
+										<div class="text-xs leading-relaxed text-blue-600 dark:text-blue-400 mt-0.5">
+											{$i18n.t(
+												'MCP（模型上下文协议）是一个用于 LLM 与外部工具通信的开放标准。当前支持 HTTP（优先 Streamable HTTP，自动兼容旧版 HTTP+SSE）与 stdio 两种传输方式。'
+											)}
+										</div>
 								</div>
 							</div>
 						</div>

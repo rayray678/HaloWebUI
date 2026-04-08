@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import pathlib
 import sys
@@ -347,6 +348,167 @@ def test_http_client_protocol_negotiation_retries_on_http_error():
     assert ("initialize", "2025-06-18") in seen_protocol_versions
     assert ("initialize", "2024-11-05") in seen_protocol_versions
     assert ("tools/list", "2024-11-05") in seen_protocol_versions
+
+
+def test_http_client_falls_back_to_legacy_sse_transport():
+    from aiohttp import web
+
+    from open_webui.utils.mcp import MCPHttpClient
+
+    root_post_calls = 0
+    sse_connects = 0
+    posted_methods = []
+    outbound_events: asyncio.Queue = asyncio.Queue()
+
+    async def sse_handler(request: web.Request):
+        nonlocal sse_connects
+        sse_connects += 1
+
+        resp = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "text/event-stream"},
+        )
+        await resp.prepare(request)
+        await resp.write(b"event: endpoint\ndata: /messages\n\n")
+
+        try:
+            while True:
+                event = await outbound_events.get()
+                if event is None:
+                    break
+
+                event_type, payload = event
+                body = json.dumps(payload)
+                await resp.write(
+                    f"event: {event_type}\ndata: {body}\n\n".encode("utf-8")
+                )
+        except (ConnectionResetError, RuntimeError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                await resp.write_eof()
+
+        return resp
+
+    async def root_post_handler(_request: web.Request):
+        nonlocal root_post_calls
+        root_post_calls += 1
+        return web.Response(status=405, text="Method Not Allowed")
+
+    async def message_post_handler(request: web.Request):
+        payload = await request.json()
+        method = payload.get("method")
+        posted_methods.append(method)
+
+        if method == "initialize":
+            await outbound_events.put(
+                (
+                    "message",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload.get("id"),
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "serverInfo": {"name": "LegacySSE", "version": "0.1.0"},
+                            "capabilities": {"tools": {}},
+                        },
+                    },
+                )
+            )
+        elif method == "tools/list":
+            await outbound_events.put(
+                (
+                    "message",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload.get("id"),
+                        "result": {
+                            "tools": [
+                                {
+                                    "name": "legacy_echo",
+                                    "description": "echo via legacy sse",
+                                    "inputSchema": {"type": "object"},
+                                }
+                            ]
+                        },
+                    },
+                )
+            )
+        elif method == "tools/call":
+            await outbound_events.put(
+                (
+                    "message",
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/message",
+                        "params": {"level": "info", "data": "legacy progress"},
+                    },
+                )
+            )
+            await outbound_events.put(
+                (
+                    "message",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload.get("id"),
+                        "result": {
+                            "content": [{"type": "text", "text": "legacy-ok"}],
+                            "name": (payload.get("params") or {}).get("name"),
+                        },
+                    },
+                )
+            )
+
+        return web.Response(status=202)
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/sse", sse_handler)
+        app.router.add_post("/sse", root_post_handler)
+        app.router.add_post("/messages", message_post_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        url = f"http://127.0.0.1:{port}/sse"
+
+        client = MCPHttpClient(url)
+        try:
+            init = await client.initialize()
+            assert init.get("serverInfo", {}).get("name") == "LegacySSE"
+
+            await client.notify_initialized()
+            tools = await client.list_tools()
+            assert tools[0]["name"] == "legacy_echo"
+
+            notifications = []
+
+            async def on_notification(msg):
+                notifications.append(msg)
+
+            result = await client.call_tool(
+                "legacy_echo",
+                {"x": 1},
+                on_notification=on_notification,
+            )
+            assert result["content"][0]["text"] == "legacy-ok"
+            assert notifications[0]["method"] == "notifications/message"
+        finally:
+            await outbound_events.put(None)
+            await client.close()
+            await runner.cleanup()
+
+    asyncio.run(run())
+
+    assert root_post_calls == 1
+    assert sse_connects == 1
+    assert posted_methods == [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "tools/call",
+    ]
 
 
 def _write_stdio_server(tmp_path, script_name: str, body: str) -> str:

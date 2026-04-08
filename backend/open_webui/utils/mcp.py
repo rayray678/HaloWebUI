@@ -11,7 +11,7 @@ from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Deque, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import aiohttp
@@ -50,6 +50,7 @@ STDIO_START_TRANSPORT_ERROR_MARKERS = (
     "closed stdout before sending a response",
 )
 MCP_RUNTIME_PROFILES = {"main", "slim"}
+LEGACY_SSE_FALLBACK_STATUS_CODES = {400, 404, 405}
 MCP_RESERVED_HTTP_HEADER_NAMES = {
     "accept",
     "connection",
@@ -73,6 +74,13 @@ class MCPHttpError(RuntimeError):
         self.parsed_json = parsed_json
         self.raw_body = raw_body
         super().__init__(f"MCP HTTP {status_code}: {raw_body}")
+
+
+class MCPLegacyFallbackRequested(RuntimeError):
+    def __init__(self, http_error: MCPHttpError):
+        self.http_error = http_error
+        self.status_code = http_error.status_code
+        super().__init__(str(http_error))
 
 
 def _get_ssl_context() -> Optional[ssl.SSLContext]:
@@ -570,6 +578,11 @@ class MCPStreamableHttpClient:
                     self.protocol_version = negotiated_version
                     retried = True
                     continue
+                if (
+                    exc.status_code in LEGACY_SSE_FALLBACK_STATUS_CODES
+                    and not supported_versions
+                ):
+                    raise MCPLegacyFallbackRequested(exc) from exc
                 raise RuntimeError(
                     _format_protocol_error(
                         requested_version,
@@ -613,6 +626,9 @@ class MCPStreamableHttpClient:
                 context="HTTP",
             )
             return result
+
+    async def close(self) -> None:
+        return None
 
     async def notify_initialized(self) -> None:
         payload = {
@@ -677,6 +693,455 @@ class MCPStreamableHttpClient:
         if "error" in msg:
             raise RuntimeError(str(msg["error"]))
         return msg.get("result", {}) or {}
+
+
+class MCPLegacySSEHttpClient:
+    def __init__(
+        self,
+        url: str,
+        *,
+        auth_headers: Optional[Dict[str, str]] = None,
+        request_headers: Optional[Dict[str, str]] = None,
+        protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
+        timeout_s: Optional[int] = None,
+    ):
+        self.url = _strip_trailing_slash(url)
+        merged_headers: Dict[str, str] = {}
+        if auth_headers:
+            merged_headers.update(auth_headers)
+        if request_headers:
+            merged_headers.update(request_headers)
+        self.request_headers = merged_headers
+        self.protocol_version = protocol_version
+        self.timeout_s = (
+            timeout_s if timeout_s is not None else AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
+        )
+        self.message_url: Optional[str] = None
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._sse_response: Optional[aiohttp.ClientResponse] = None
+        self._request_lock = asyncio.Lock()
+
+    async def close(self) -> None:
+        response = self._sse_response
+        self._sse_response = None
+        self.message_url = None
+        if response is not None:
+            response.close()
+
+        session = self._session
+        self._session = None
+        if session is not None and not session.closed:
+            await session.close()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=self.timeout_s) if self.timeout_s else None
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
+    def _build_stream_headers(self) -> Dict[str, str]:
+        return {
+            **self.request_headers,
+            "Accept": "text/event-stream",
+        }
+
+    def _build_post_headers(self) -> Dict[str, str]:
+        return {
+            **self.request_headers,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
+    async def _read_sse_event(self) -> Dict[str, str]:
+        if self._sse_response is None:
+            raise RuntimeError("Legacy MCP SSE stream is not connected.")
+
+        event_type = "message"
+        data_lines: List[str] = []
+        event_id: Optional[str] = None
+
+        while True:
+            raw_line = await self._sse_response.content.readline()
+            if not raw_line:
+                raise RuntimeError("Legacy MCP SSE stream closed before delivering a message.")
+
+            line = raw_line.decode("utf-8", errors="ignore").rstrip("\r\n")
+            if not line:
+                if not data_lines and event_id is None and event_type == "message":
+                    continue
+                return {
+                    "event": event_type,
+                    "data": "\n".join(data_lines),
+                    "id": event_id or "",
+                }
+
+            if line.startswith(":"):
+                continue
+
+            field, _, value = line.partition(":")
+            if value.startswith(" "):
+                value = value[1:]
+
+            if field == "event":
+                event_type = value or "message"
+            elif field == "data":
+                data_lines.append(value)
+            elif field == "id":
+                event_id = value
+
+    async def _ensure_stream_ready(self) -> None:
+        if self._sse_response is not None and not self._sse_response.closed:
+            return
+
+        session = await self._get_session()
+        ssl_ctx = _get_ssl_context()
+        response = await session.get(
+            self.url,
+            headers=self._build_stream_headers(),
+            ssl=ssl_ctx,
+        )
+
+        if response.status >= 400:
+            raw_body = await response.text()
+            response.close()
+            parsed_json = None
+            try:
+                parsed_candidate = json.loads(raw_body)
+                if isinstance(parsed_candidate, dict):
+                    parsed_json = parsed_candidate
+            except Exception:
+                parsed_json = None
+            raise MCPHttpError(response.status, parsed_json, raw_body)
+
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "text/event-stream" not in content_type:
+            raw_body = await response.text()
+            response.close()
+            raise RuntimeError(
+                "Legacy MCP SSE fallback expected text/event-stream from the server."
+            )
+
+        self._sse_response = response
+        endpoint_event = await self._read_sse_event()
+        if endpoint_event.get("event") != "endpoint":
+            response.close()
+            self._sse_response = None
+            raise RuntimeError(
+                "Legacy MCP SSE fallback expected an endpoint event as the first server event."
+            )
+
+        endpoint_data = str(endpoint_event.get("data") or "").strip()
+        if not endpoint_data:
+            response.close()
+            self._sse_response = None
+            raise RuntimeError("Legacy MCP SSE endpoint event did not include a POST target.")
+
+        self.message_url = urljoin(self.url, endpoint_data)
+
+    async def _read_jsonrpc_from_stream(
+        self,
+        request_id: str,
+        on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
+    ) -> Dict[str, Any]:
+        while True:
+            event = await self._read_sse_event()
+            event_type = event.get("event") or "message"
+
+            if event_type == "endpoint":
+                endpoint_data = str(event.get("data") or "").strip()
+                if endpoint_data:
+                    self.message_url = urljoin(self.url, endpoint_data)
+                continue
+
+            if event_type != "message":
+                continue
+
+            payload = str(event.get("data") or "").strip()
+            if not payload:
+                continue
+
+            try:
+                msg = json.loads(payload)
+            except Exception:
+                log.debug("Ignoring invalid legacy MCP SSE payload: %s", payload)
+                continue
+
+            if str(msg.get("id", "")) == str(request_id):
+                return msg
+
+            if "id" not in msg and on_notification is not None:
+                try:
+                    await on_notification(msg)
+                except Exception:
+                    pass
+
+    async def _post_jsonrpc(
+        self,
+        payload: Dict[str, Any],
+        *,
+        expect_response: bool,
+        on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        await self._ensure_stream_ready()
+        if not self.message_url:
+            raise RuntimeError("Legacy MCP SSE fallback is missing a POST endpoint.")
+
+        session = await self._get_session()
+        ssl_ctx = _get_ssl_context()
+        request_id = str(payload.get("id", ""))
+
+        async with session.post(
+            self.message_url,
+            headers=self._build_post_headers(),
+            json=payload,
+            ssl=ssl_ctx,
+        ) as response:
+            if response.status >= 400:
+                raw_body = await response.text()
+                parsed_json = None
+                try:
+                    parsed_candidate = json.loads(raw_body)
+                    if isinstance(parsed_candidate, dict):
+                        parsed_json = parsed_candidate
+                except Exception:
+                    parsed_json = None
+                raise MCPHttpError(response.status, parsed_json, raw_body)
+
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            if expect_response:
+                if "application/json" in content_type:
+                    return await response.json()
+                if "text/event-stream" in content_type:
+                    return await _read_jsonrpc_response(
+                        response,
+                        request_id,
+                        on_notification=on_notification,
+                    )
+
+                raw_body = await response.text()
+                if raw_body.strip():
+                    try:
+                        parsed_candidate = json.loads(raw_body)
+                        if isinstance(parsed_candidate, dict):
+                            return parsed_candidate
+                    except Exception:
+                        pass
+
+        if not expect_response:
+            return None
+
+        return await self._read_jsonrpc_from_stream(
+            request_id,
+            on_notification=on_notification,
+        )
+
+    async def initialize(self) -> Dict[str, Any]:
+        retried = False
+
+        while True:
+            requested_version = self.protocol_version
+            request_id = str(uuid4())
+            payload = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": requested_version,
+                    "capabilities": {"tools": {}},
+                    "clientInfo": {"name": "HaloWebUI", "version": "unknown"},
+                },
+            }
+
+            try:
+                async with self._request_lock:
+                    msg = await self._post_jsonrpc(payload, expect_response=True)
+            except MCPHttpError as exc:
+                supported_versions = _extract_supported_versions(
+                    exc.parsed_json, exc.raw_body
+                )
+                negotiated_version = _select_best_common_version(supported_versions)
+                if (
+                    negotiated_version
+                    and negotiated_version != requested_version
+                    and not retried
+                ):
+                    log.info(
+                        "Retrying legacy MCP SSE initialize with negotiated version %s",
+                        negotiated_version,
+                    )
+                    self.protocol_version = negotiated_version
+                    retried = True
+                    continue
+                raise RuntimeError(
+                    _format_protocol_error(
+                        requested_version,
+                        supported_versions,
+                        str(exc),
+                    )
+                ) from exc
+
+            msg = msg or {}
+            if "error" in msg:
+                supported_versions = _extract_supported_versions(
+                    msg,
+                    json.dumps(msg, ensure_ascii=False),
+                )
+                negotiated_version = _select_best_common_version(supported_versions)
+                if (
+                    negotiated_version
+                    and negotiated_version != requested_version
+                    and not retried
+                ):
+                    log.info(
+                        "Retrying legacy MCP SSE initialize with negotiated version %s",
+                        negotiated_version,
+                    )
+                    self.protocol_version = negotiated_version
+                    retried = True
+                    continue
+                raise RuntimeError(
+                    _format_protocol_error(
+                        requested_version,
+                        supported_versions,
+                        str(msg["error"]),
+                    )
+                )
+
+            result = msg.get("result", {}) or {}
+            self.protocol_version = _finalize_protocol_version(
+                result,
+                requested_version,
+                context="legacy-sse",
+            )
+            return result
+
+    async def notify_initialized(self) -> None:
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        }
+        async with self._request_lock:
+            await self._post_jsonrpc(payload, expect_response=False)
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        tools: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+
+        while True:
+            request_id = str(uuid4())
+            payload = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/list",
+                "params": {"cursor": cursor} if cursor else {},
+            }
+            async with self._request_lock:
+                msg = await self._post_jsonrpc(payload, expect_response=True)
+
+            msg = msg or {}
+            if "error" in msg:
+                raise RuntimeError(str(msg["error"]))
+
+            result = msg.get("result", {}) or {}
+            tools.extend(result.get("tools", []) or [])
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+
+        return tools
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
+    ) -> Dict[str, Any]:
+        request_id = str(uuid4())
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }
+        async with self._request_lock:
+            msg = await self._post_jsonrpc(
+                payload,
+                expect_response=True,
+                on_notification=on_notification,
+            )
+
+        msg = msg or {}
+        if "error" in msg:
+            raise RuntimeError(str(msg["error"]))
+        return msg.get("result", {}) or {}
+
+
+class MCPHttpClient:
+    def __init__(
+        self,
+        url: str,
+        *,
+        auth_headers: Optional[Dict[str, str]] = None,
+        request_headers: Optional[Dict[str, str]] = None,
+        protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
+        timeout_s: Optional[int] = None,
+    ):
+        self.url = url
+        self.auth_headers = auth_headers
+        self.request_headers = request_headers
+        self.protocol_version = protocol_version
+        self.timeout_s = timeout_s
+        self._client: Any = MCPStreamableHttpClient(
+            url,
+            auth_headers=auth_headers,
+            request_headers=request_headers,
+            protocol_version=protocol_version,
+            timeout_s=timeout_s,
+        )
+
+    async def initialize(self) -> Dict[str, Any]:
+        try:
+            result = await self._client.initialize()
+        except MCPLegacyFallbackRequested as exc:
+            log.info(
+                "Falling back to legacy MCP HTTP+SSE transport for %s after HTTP %s",
+                self.url,
+                exc.status_code,
+            )
+            await self._client.close()
+            self._client = MCPLegacySSEHttpClient(
+                self.url,
+                auth_headers=self.auth_headers,
+                request_headers=self.request_headers,
+                protocol_version=self.protocol_version,
+                timeout_s=self.timeout_s,
+            )
+            result = await self._client.initialize()
+
+        self.protocol_version = self._client.protocol_version
+        return result
+
+    async def notify_initialized(self) -> None:
+        await self._client.notify_initialized()
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        return await self._client.list_tools()
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
+    ) -> Dict[str, Any]:
+        return await self._client.call_tool(
+            name=name,
+            arguments=arguments,
+            on_notification=on_notification,
+        )
+
+    async def close(self) -> None:
+        await self._client.close()
 
 
 class MCPStdioClient:
@@ -1318,20 +1783,23 @@ async def get_mcp_server_data(
     if not url:
         raise ValueError("Missing MCP server URL")
 
-    client = MCPStreamableHttpClient(
+    client = MCPHttpClient(
         url,
         request_headers=_build_mcp_http_request_headers(connection, session_token),
         protocol_version=protocol_version,
     )
-    init_result = await client.initialize()
-    await client.notify_initialized()
-    tools = await client.list_tools()
+    try:
+        init_result = await client.initialize()
+        await client.notify_initialized()
+        tools = await client.list_tools()
 
-    return {
-        "server_info": init_result.get("serverInfo", {}) or {},
-        "capabilities": init_result.get("capabilities", {}) or {},
-        "tools": tools,
-    }
+        return {
+            "server_info": init_result.get("serverInfo", {}) or {},
+            "capabilities": init_result.get("capabilities", {}) or {},
+            "tools": tools,
+        }
+    finally:
+        await client.close()
 
 
 async def get_mcp_servers_data(
@@ -1434,16 +1902,19 @@ async def execute_mcp_tool(
     if not url:
         raise ValueError("Missing MCP server URL")
 
-    client = MCPStreamableHttpClient(
+    client = MCPHttpClient(
         url,
         request_headers=_build_mcp_http_request_headers(connection, session_token),
         protocol_version=protocol_version,
         timeout_s=MCP_TOOL_CALL_TIMEOUT,
     )
-    await client.initialize()
-    await client.notify_initialized()
-    return await client.call_tool(
-        name=name,
-        arguments=arguments or {},
-        on_notification=on_notification,
-    )
+    try:
+        await client.initialize()
+        await client.notify_initialized()
+        return await client.call_tool(
+            name=name,
+            arguments=arguments or {},
+            on_notification=on_notification,
+        )
+    finally:
+        await client.close()

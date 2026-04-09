@@ -56,6 +56,7 @@
 	import Image from '../common/Image.svelte';
 	import ModelIcon from '../common/ModelIcon.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import type { ChatAssistantSnapshot } from '$lib/utils/chat-assistants';
 	import {
 		isWebSearchEnabled,
 		normalizeWebSearchMode,
@@ -86,6 +87,8 @@
 
 	export let atSelectedModel: Model | undefined = undefined;
 	export let selectedModels: [''];
+	export let activeAssistant: ChatAssistantSnapshot | null = null;
+	export let onDeactivateAssistant: (() => void) | null = null;
 
 	let selectedModelIds = [];
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
@@ -1310,6 +1313,33 @@
 														<span class="text-sm font-medium text-gray-600 dark:text-gray-300">
 															{toolServers.length + selectedToolIds.length}
 														</span>
+													</button>
+												</Tooltip>
+											{/if}
+
+											{#if activeAssistant}
+												<Tooltip
+													content={`当前助手：${activeAssistant.name}${activeAssistant.description ? `\n${activeAssistant.description}` : ''}`}
+													placement="top"
+												>
+													<button
+														type="button"
+														class={`${featureBadgeBaseClass} px-2.5 py-1.5 gap-1.5 max-w-[13rem]`}
+														aria-label={`关闭助手 ${activeAssistant.name}`}
+														on:click={() => {
+															onDeactivateAssistant?.();
+														}}
+													>
+														<span class="shrink-0 text-sm leading-none">
+															{activeAssistant.emoji}
+														</span>
+														<span class={`${featureBadgeLabelClass} truncate`}>
+															{activeAssistant.name}
+														</span>
+														<XMark
+															className="size-3 text-slate-500 dark:text-slate-300 shrink-0"
+															strokeWidth="2.25"
+														/>
 													</button>
 												</Tooltip>
 											{/if}

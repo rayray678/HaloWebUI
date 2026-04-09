@@ -54,6 +54,11 @@
 	} from '$lib/utils';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import {
+		type ChatAssistantSnapshot,
+		PENDING_ASSISTANT_STORAGE_KEY,
+		toChatAssistantSnapshot
+	} from '$lib/utils/chat-assistants';
+	import {
 		getTemporaryChatAccess,
 		getTemporaryChatNavigationPath,
 		persistTemporaryChatOverride,
@@ -65,6 +70,7 @@
 		type WebSearchMode
 	} from '$lib/utils/web-search-mode';
 	import { getFunctionPipeRootId } from '$lib/utils/image-generation';
+	import { applyUserSettingsSnapshot } from '$lib/utils/user-settings';
 
 	import { generateChatCompletion } from '$lib/apis/ollama';
 	import {
@@ -166,6 +172,7 @@
 	let atSelectedModel: Model | undefined;
 	let selectedModelIds = [];
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
+	let activeAssistant: ChatAssistantSnapshot | null = null;
 
 	let selectedToolIds = [];
 	let imageGenerationEnabled = false;
@@ -222,6 +229,32 @@
 	// 用缓存值打断 reactive 级联：正向同步更新缓存 → 反向 onChange 检测到缓存一致则跳过
 	let _lastSyncedEffort: string | null = null;
 	let _lastSyncedTokens: number | null = null;
+
+	const activateAssistant = (value: Record<string, unknown> | ChatAssistantSnapshot | null) => {
+		const assistant = toChatAssistantSnapshot(value as Record<string, unknown> | null);
+		if (!assistant) {
+			return;
+		}
+
+		activeAssistant = assistant;
+		params = {
+			...params,
+			system: assistant.prompt
+		};
+		persistChatSessionState();
+	};
+
+	const deactivateAssistant = () => {
+		const assistantPrompt = activeAssistant?.prompt ?? null;
+		activeAssistant = null;
+
+		if (assistantPrompt && params?.system === assistantPrompt) {
+			const { system: _system, ...rest } = params;
+			params = rest;
+		}
+
+		persistChatSessionState();
+	};
 
 	const getRequestStopTokens = () => {
 		const rawStop = params?.stop ?? $settings?.params?.stop;
@@ -630,6 +663,19 @@
 			if (state.codeInterpreterEnabled !== undefined) {
 				codeInterpreterEnabled = Boolean(state.codeInterpreterEnabled);
 			}
+			activeAssistant = toChatAssistantSnapshot(state.activeAssistant ?? null);
+
+			if (typeof state.systemPrompt === 'string') {
+				params = {
+					...params,
+					system: state.systemPrompt
+				};
+			} else if (activeAssistant?.prompt) {
+				params = {
+					...params,
+					system: activeAssistant.prompt
+				};
+			}
 
 			return true;
 		} catch {
@@ -647,6 +693,8 @@
 					{ webSearchMode },
 					getPreferredDefaultWebSearchMode()
 				),
+				activeAssistant,
+				systemPrompt: typeof params?.system === 'string' ? params.system : null,
 				imageGenerationEnabled,
 				imageGenerationOptions,
 				codeInterpreterEnabled,
@@ -686,6 +734,25 @@
 		localStorage.setItem(toKey, state);
 		localStorage.removeItem(fromKey);
 	};
+
+	const buildPersistedChatData = (historyState, messages = createMessagesList(historyState, historyState.currentId)) => ({
+		models: selectedModels,
+		history: historyState,
+		messages,
+		params,
+		files: chatFiles,
+		assistant: activeAssistant ?? undefined
+	});
+
+	$: {
+		const currentSystemPrompt = typeof params?.system === 'string' ? params.system : null;
+		currentSystemPrompt;
+		activeAssistant;
+
+		if (!chatIdProp) {
+			persistChatSessionState();
+		}
+	}
 
 	// 正向同步: Controls(params) → ThinkingControl(reasoningEffort/maxThinkingTokens)
 	$: {
@@ -1468,6 +1535,7 @@
 			taskIds = null;
 			processing = '';
 			atSelectedModel = undefined;
+			activeAssistant = null;
 			prompt = '';
 			files = [];
 			selectedToolIds = [];
@@ -1547,16 +1615,30 @@
 		const userSettings = await getUserSettings(localStorage.token);
 
 		if (userSettings) {
-			settings.set(userSettings.ui);
+			applyUserSettingsSnapshot(userSettings, get(settings) ?? {});
 			temporaryChatState = syncTemporaryChatState(userSettings.ui);
 		} else {
-			const localSettings = safeParseStoredJson(localStorage.getItem('settings'), {});
-			settings.set(localSettings);
-			temporaryChatState = syncTemporaryChatState(localSettings);
+			const fallbackSettings = get(settings) ?? {};
+			settings.set(fallbackSettings);
+			temporaryChatState = syncTemporaryChatState(fallbackSettings);
 		}
 
 		if (fresh && $page.url.searchParams.get('web-search') !== 'true') {
 			webSearchMode = getPreferredWebSearchMode(userSettings?.ui ?? $settings, 'off');
+		}
+
+		if (fresh) {
+			const pendingAssistant = toChatAssistantSnapshot(
+				safeParseStoredJson<Record<string, unknown> | null>(
+					sessionStorage.getItem(PENDING_ASSISTANT_STORAGE_KEY),
+					null
+				)
+			);
+			sessionStorage.removeItem(PENDING_ASSISTANT_STORAGE_KEY);
+
+			if (pendingAssistant) {
+				activateAssistant(pendingAssistant);
+			}
 		}
 
 		if (window.location.pathname === '/') {
@@ -1634,11 +1716,8 @@
 
 				chatTitle.set(chatContent.title);
 
-				if (!$settings || Object.keys($settings).length === 0) {
-					await settings.set(safeParseStoredJson(localStorage.getItem('settings'), {}));
-				}
-
 				params = chatContent?.params ?? {};
+				activeAssistant = toChatAssistantSnapshot(chatContent?.assistant ?? null);
 				chatFiles = chatContent?.files ?? [];
 
 				void (async () => {
@@ -1952,13 +2031,11 @@
 
 		if ($chatId == chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(localStorage.token, chatId, {
-					models: selectedModels,
-					messages: messages,
-					history: history,
-					params: params,
-					files: chatFiles
-				});
+				chat = await updateChatById(
+					localStorage.token,
+					chatId,
+					buildPersistedChatData(history, messages)
+				);
 
 				currentChatPage.set(1);
 				await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -2023,13 +2100,11 @@
 
 		if ($chatId == chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(localStorage.token, chatId, {
-					models: selectedModels,
-					messages: messages,
-					history: history,
-					params: params,
-					files: chatFiles
-				});
+				chat = await updateChatById(
+					localStorage.token,
+					chatId,
+					buildPersistedChatData(history, messages)
+				);
 
 				currentChatPage.set(1);
 				await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -3353,13 +3428,10 @@
 			chat = await createNewChat(localStorage.token, {
 				id: _chatId,
 				title: $i18n.t('New Chat'),
-				models: selectedModels,
 				system: $settings.system ?? undefined,
-				params: params,
-				history: history,
-				messages: createMessagesList(history, history.currentId),
 				tags: [],
-				timestamp: Date.now()
+				timestamp: Date.now(),
+				...buildPersistedChatData(history)
 			});
 
 			_chatId = chat.id;
@@ -3383,13 +3455,7 @@
 	const saveChatHandler = async (_chatId, history) => {
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(localStorage.token, _chatId, {
-					models: selectedModels,
-					history: history,
-					messages: createMessagesList(history, history.currentId),
-					params: params,
-					files: chatFiles
-				});
+				chat = await updateChatById(localStorage.token, _chatId, buildPersistedChatData(history));
 				currentChatPage.set(1);
 				await chats.set(await getChatList(localStorage.token, $currentChatPage));
 			}
@@ -3456,6 +3522,7 @@
 							models: selectedModels,
 							system: $settings.system ?? undefined,
 							params: params,
+							assistant: activeAssistant ?? undefined,
 							history: history,
 							timestamp: Date.now()
 						}
@@ -3531,6 +3598,8 @@
 								bind:atSelectedModel
 								bind:reasoningEffort
 								bind:maxThinkingTokens
+								{activeAssistant}
+								onDeactivateAssistant={deactivateAssistant}
 								toolServers={$toolServers}
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
 								{stopResponse}
@@ -3610,6 +3679,9 @@
 								bind:atSelectedModel
 								bind:reasoningEffort
 								bind:maxThinkingTokens
+								{activeAssistant}
+								onActivateAssistant={activateAssistant}
+								onDeactivateAssistant={deactivateAssistant}
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
 								toolServers={$toolServers}
 								{stopResponse}

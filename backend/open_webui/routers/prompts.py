@@ -10,8 +10,14 @@ from open_webui.models.prompts import (
 )
 from open_webui.constants import ERROR_MESSAGES
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.access_control import has_access, has_permission
+from open_webui.utils.auth import get_verified_user
+from open_webui.utils.access_control import (
+    can_read_resource,
+    can_write_resource,
+    ensure_requested_access_control_allowed,
+    ensure_resource_acl_change_allowed,
+    has_permission,
+)
 
 router = APIRouter()
 
@@ -73,16 +79,12 @@ async def create_new_prompt(
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_prompts",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        form_data.access_control,
+        public_permission_key="sharing.public_prompts",
+    )
 
     prompt = Prompts.get_prompt_by_command(form_data.command)
     if prompt is None:
@@ -114,11 +116,7 @@ async def get_prompt_by_id(prompt_id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        user.role == "admin"
-        or prompt.user_id == user.id
-        or has_access(user.id, "read", prompt.access_control)
-    ):
+    if can_read_resource(user, prompt):
         return prompt
 
     raise HTTPException(
@@ -146,26 +144,22 @@ async def update_prompt_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_prompts",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = prompt.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        prompt,
+        form_data.access_control,
+        public_permission_key="sharing.public_prompts",
+    )
 
     result = Prompts.update_prompt_by_id(prompt_id, form_data)
     if result:
@@ -194,11 +188,7 @@ async def update_prompt_meta_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
@@ -230,11 +220,7 @@ async def toggle_prompt_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
@@ -263,11 +249,7 @@ async def delete_prompt_by_id(prompt_id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
@@ -286,11 +268,7 @@ async def get_prompt_by_command(command: str, user=Depends(get_verified_user)):
     prompt = Prompts.get_prompt_by_command(f"/{command}")
 
     if prompt:
-        if (
-            user.role == "admin"
-            or prompt.user_id == user.id
-            or has_access(user.id, "read", prompt.access_control)
-        ):
+        if can_read_resource(user, prompt):
             return prompt
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -312,26 +290,22 @@ async def update_prompt_by_command(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_prompts",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = prompt.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        prompt,
+        form_data.access_control,
+        public_permission_key="sharing.public_prompts",
+    )
 
     result = Prompts.update_prompt_by_command(f"/{command}", form_data)
     if result:
@@ -354,11 +328,7 @@ async def toggle_prompt_by_command(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
@@ -382,11 +352,7 @@ async def delete_prompt_by_command(command: str, user=Depends(get_verified_user)
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        prompt.user_id != user.id
-        and not has_access(user.id, "write", prompt.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, prompt):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,

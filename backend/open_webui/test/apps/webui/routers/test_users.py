@@ -90,6 +90,11 @@ class TestUsers(AbstractPostgresTest):
                 },
             )
         assert response.status_code == 200
+        assert response.json() == {
+            "ui": {"attr1": "value1", "attr2": "value2"},
+            "revision": 1,
+            "model_config": {"attr3": "value3", "attr4": "value4"},
+        }
 
         # Get user settings
         with mock_webui_user(id="2"):
@@ -97,6 +102,7 @@ class TestUsers(AbstractPostgresTest):
         assert response.status_code == 200
         assert response.json() == {
             "ui": {"attr1": "value1", "attr2": "value2"},
+            "revision": 1,
             "model_config": {"attr3": "value3", "attr4": "value4"},
         }
 
@@ -209,6 +215,81 @@ class TestUsers(AbstractPostgresTest):
         assert app.state.BASE_MODELS is None
         assert app.state.MODELS == {}
         assert "2" not in auth_utils._user_cache
+
+    def test_update_user_settings_merges_ui_patch_and_tracks_revision(self):
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.post(
+                self.create_url("/user/settings/update"),
+                json={
+                    "ui": {
+                        "connections": {
+                            "openai": {
+                                "OPENAI_API_BASE_URLS": ["https://api.example.com/v1"],
+                            }
+                        }
+                    }
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["revision"] == 1
+
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.post(
+                self.create_url("/user/settings/update"),
+                json={
+                    "revision": 1,
+                    "ui": {
+                        "autoFollowUps": False,
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "ui": {
+                "connections": {
+                    "openai": {
+                        "OPENAI_API_BASE_URLS": ["https://api.example.com/v1"],
+                    }
+                },
+                "autoFollowUps": False,
+            },
+            "revision": 2,
+        }
+
+    def test_update_user_settings_rejects_stale_revision(self):
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.post(
+                self.create_url("/user/settings/update"),
+                json={"ui": {"theme": "dark"}},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["revision"] == 1
+
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.post(
+                self.create_url("/user/settings/update"),
+                json={
+                    "revision": 0,
+                    "ui": {"theme": "light"},
+                },
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "User settings were updated elsewhere. Please retry with the latest settings."
+        )
+
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.get(self.create_url("/user/settings"))
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "ui": {"theme": "dark"},
+            "revision": 1,
+        }
 
     def test_update_user_settings_does_not_invalidate_model_cache_for_unrelated_ui_changes(
         self, monkeypatch

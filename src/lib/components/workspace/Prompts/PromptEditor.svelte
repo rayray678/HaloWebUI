@@ -44,6 +44,7 @@
 	let initialSnapshot = null;
 	let snapshot = null;
 	let dirty = false;
+	$: canManageAcl = !edit || $user?.role === 'admin' || prompt?.user_id === $user?.id;
 
 	let showAccessControlModal = false;
 
@@ -153,6 +154,8 @@
 	bind:accessControl
 	accessRoles={['read', 'write']}
 	allowPublic={$user?.permissions?.sharing?.public_prompts || $user?.role === 'admin'}
+	allowUserSelection={$user?.role === 'admin'}
+	readOnly={!canManageAcl}
 />
 
 <div class="workspace-section w-full max-h-full flex justify-center">
@@ -184,9 +187,11 @@
 
 							<div class="self-center shrink-0">
 								<button
-									class="bg-gray-50 hover:bg-gray-100 text-black dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-white transition px-2 py-1 rounded-full flex gap-1 items-center"
+									class="bg-gray-50 hover:bg-gray-100 disabled:hover:bg-gray-50 text-black dark:bg-gray-850 dark:hover:bg-gray-800 dark:disabled:hover:bg-gray-850 dark:text-white transition px-2 py-1 rounded-full flex gap-1 items-center disabled:opacity-60 disabled:cursor-not-allowed"
 									type="button"
+									disabled={!canManageAcl}
 									on:click={() => {
+										if (!canManageAcl) return;
 										showAccessControlModal = true;
 									}}
 								>

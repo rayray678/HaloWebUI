@@ -3,7 +3,7 @@
 	import { createNewTool, getTools } from '$lib/apis/tools';
 	import ToolkitEditor from '$lib/components/workspace/Tools/ToolkitEditor.svelte';
 	import { WEBUI_VERSION } from '$lib/constants';
-	import { tools } from '$lib/stores';
+	import { tools, user } from '$lib/stores';
 	import { compareVersion, extractFrontmatter } from '$lib/utils';
 	import { onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
@@ -16,6 +16,20 @@
 	let mounted = false;
 	let clone = false;
 	let tool = null;
+	const createPrivateAccessControl = () => ({
+		read: {
+			group_ids: [],
+			user_ids: []
+		},
+		write: {
+			group_ids: [],
+			user_ids: []
+		}
+	});
+	$: defaultAccessControl =
+		$user?.permissions?.sharing?.public_tools || $user?.role === 'admin'
+			? null
+			: createPrivateAccessControl();
 
 	const saveHandler = async (data) => {
 		console.log(data);
@@ -94,19 +108,19 @@
 			descKey="Write, configure, and save a custom Python tool for your workspace workflows."
 		/>
 
-		{#key tool?.content}
-			<ToolkitEditor
-				id={tool?.id ?? ''}
-				name={tool?.name ?? ''}
-				meta={tool?.meta ?? { description: '' }}
-				content={tool?.content ?? ''}
-				accessControl={null}
-				{clone}
-				showBackButton={false}
-				onSave={(value) => {
-					return saveHandler(value);
-				}}
-			/>
+			{#key tool?.content}
+				<ToolkitEditor
+					id={tool?.id ?? ''}
+					name={tool?.name ?? ''}
+					meta={tool?.meta ?? { description: '' }}
+					content={tool?.content ?? ''}
+					accessControl={tool?.access_control ?? defaultAccessControl}
+					{clone}
+					showBackButton={false}
+					onSave={(value) => {
+						return saveHandler(value);
+					}}
+				/>
 		{/key}
 	</div>
 {/if}

@@ -111,7 +111,10 @@
 			dispatch('save');
 			toast.success($i18n.t('Settings saved successfully!'));
 		} catch (error) {
-			toast.error($i18n.t('Failed to save connections'));
+			if ((error as { status?: number })?.status === 409) {
+				connections = JSON.parse(JSON.stringify((($settings as any)?.connections ?? {}) as any));
+				ensureAll();
+			}
 			throw error;
 		}
 	};

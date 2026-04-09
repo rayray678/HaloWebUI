@@ -91,8 +91,8 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
 
     Migration rules:
     - Never delete legacy fields (e.g. ui.directConnections) or global configs.
-    - Only fill missing provider configs in ui.connections.
-    - Admin users: if no per-user provider configs exist yet, seed them from global app.state.config.
+    - Only fill missing provider configs from legacy ui.directConnections.
+    - Admin users: if no per-user provider configs exist yet at all, seed them once from global app.state.config.
     - All users: seed OpenAI-compatible connections from legacy ui.directConnections if present.
     """
 
@@ -110,8 +110,12 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
             connections["openai"] = deepcopy(legacy_direct)
             changed = True
 
-    # 2) Admin seeding from global configs (one-time, only when provider key is missing)
-    if getattr(user, "role", None) == "admin":
+    # 2) Admin seeding from global configs is a one-time migration only.
+    # Once a user has any per-user connections recorded, do not silently
+    # reintroduce provider configs from the legacy global state.
+    should_seed_from_global = getattr(user, "role", None) == "admin" and len(connections) == 0
+
+    if should_seed_from_global:
         cfg = getattr(getattr(request, "app", None), "state", None)
         cfg = getattr(cfg, "config", None)
         if cfg is not None:
@@ -135,7 +139,8 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
                 "OLLAMA_API_CONFIGS": deepcopy(getattr(cfg, "OLLAMA_API_CONFIGS", {}) or {}),
             }
 
-            # Only seed missing keys. If openai already came from legacy_direct, keep it.
+            # Seed all available providers once when no per-user connections exist yet.
+            # If openai already came from legacy_direct, keep it.
             if "openai" not in connections and _has_provider_values(
                 global_openai, "OPENAI_API_BASE_URLS", "OPENAI_API_KEYS", "OPENAI_API_CONFIGS"
             ):

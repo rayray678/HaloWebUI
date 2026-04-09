@@ -233,6 +233,7 @@
 
 	let accessControl = normalizeAccessControl({});
 	let builtinToolConfig: Record<string, boolean> = {};
+	$: canManageAcl = !edit || $user?.role === 'admin' || model?.user_id === $user?.id;
 
 	// Dirty tracking
 	const buildSnapshot = () => ({
@@ -839,12 +840,14 @@
 
 							<!-- Access Control -->
 							<div class="glass-item p-4">
-								<AccessControl
-									bind:accessControl
-									accessRoles={['read', 'write']}
-									allowPublic={$user?.permissions?.sharing?.public_models || $user?.role === 'admin'}
-								/>
-							</div>
+									<AccessControl
+										bind:accessControl
+										accessRoles={['read', 'write']}
+										allowPublic={$user?.permissions?.sharing?.public_models || $user?.role === 'admin'}
+										allowUserSelection={$user?.role === 'admin'}
+										readOnly={!canManageAcl}
+									/>
+								</div>
 						{/if}
 
 						<!-- ===== Behavior Tab ===== -->

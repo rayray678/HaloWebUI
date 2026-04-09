@@ -257,7 +257,8 @@
 		},
 		server_info: server?.server_info ?? undefined,
 		tool_count: server?.tool_count ?? undefined,
-		verified_at: server?.verified_at ?? undefined
+		verified_at: server?.verified_at ?? undefined,
+		tools: Array.isArray(server?.tools) ? [...server.tools] : undefined
 	});
 
 	const getServerDisplayName = (server: any): string => {

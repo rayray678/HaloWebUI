@@ -9,6 +9,10 @@
 	export let show = false;
 	export let agent: any = null;
 
+	const handleStartChat = () => {
+		dispatch('startChat', agent);
+	};
+
 	const handleAdd = () => {
 		dispatch('add', agent);
 	};
@@ -68,8 +72,14 @@
 					{$i18n.t('Close')}
 				</button>
 				<button
-					class="px-4 py-2 text-sm rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition flex items-center gap-2"
+					class="px-4 py-2 text-sm rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition"
 					on:click={handleAdd}
+				>
+					{$i18n.t('Add to workspace')}
+				</button>
+				<button
+					class="px-4 py-2 text-sm rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition flex items-center gap-2"
+					on:click={handleStartChat}
 				>
 					{$i18n.t('Start Chat')}
 					<ChevronRight className="size-4" />

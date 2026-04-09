@@ -16,8 +16,14 @@ from open_webui.config import CACHE_DIR
 from open_webui.constants import ERROR_MESSAGES
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from open_webui.utils.tools import get_tool_specs
-from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.access_control import has_access, has_permission
+from open_webui.utils.auth import get_verified_user
+from open_webui.utils.access_control import (
+    can_read_resource,
+    can_write_resource,
+    ensure_requested_access_control_allowed,
+    ensure_resource_acl_change_allowed,
+    has_permission,
+)
 from open_webui.env import SRC_LOG_LEVELS
 
 from open_webui.utils.tools import get_tool_servers_data
@@ -186,16 +192,12 @@ async def create_new_tools(
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_tools",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        form_data.access_control,
+        public_permission_key="sharing.public_tools",
+    )
 
     if not IDENTIFIER_RE.fullmatch(form_data.id):
         raise HTTPException(
@@ -253,12 +255,12 @@ async def get_tools_by_id(id: str, user=Depends(get_verified_user)):
     tools = Tools.get_tool_by_id(id)
 
     if tools:
-        if (
-            user.role == "admin"
-            or tools.user_id == user.id
-            or has_access(user.id, "read", tools.access_control)
-        ):
+        if can_read_resource(user, tools):
             return tools
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
     else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -285,27 +287,22 @@ async def update_tools_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    # Is the user the original creator, in a group with write access, or an admin
-    if (
-        tools.user_id != user.id
-        and not has_access(user.id, "write", tools.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, tools):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=ERROR_MESSAGES.UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_tools",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = tools.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        tools,
+        form_data.access_control,
+        public_permission_key="sharing.public_tools",
+    )
 
     try:
         form_data.content = replace_imports(form_data.content)
@@ -356,14 +353,10 @@ async def delete_tools_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        tools.user_id != user.id
-        and not has_access(user.id, "write", tools.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, tools):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=ERROR_MESSAGES.UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
     result = Tools.delete_tool_by_id(id)
@@ -384,6 +377,11 @@ async def delete_tools_by_id(
 async def get_tools_valves_by_id(id: str, user=Depends(get_verified_user)):
     tools = Tools.get_tool_by_id(id)
     if tools:
+        if not can_write_resource(user, tools):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
         try:
             valves = Tools.get_tool_valves_by_id(id)
             return valves
@@ -410,6 +408,11 @@ async def get_tools_valves_spec_by_id(
 ):
     tools = Tools.get_tool_by_id(id)
     if tools:
+        if not can_write_resource(user, tools):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
         if id in request.app.state.TOOLS:
             tools_module = request.app.state.TOOLS[id]
         else:
@@ -444,13 +447,9 @@ async def update_tools_valves_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        tools.user_id != user.id
-        and not has_access(user.id, "write", tools.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, tools):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -489,6 +488,11 @@ async def update_tools_valves_by_id(
 async def get_tools_user_valves_by_id(id: str, user=Depends(get_verified_user)):
     tools = Tools.get_tool_by_id(id)
     if tools:
+        if not can_read_resource(user, tools):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
         try:
             user_valves = Tools.get_user_valves_by_id_and_user_id(id, user.id)
             return user_valves
@@ -510,6 +514,11 @@ async def get_tools_user_valves_spec_by_id(
 ):
     tools = Tools.get_tool_by_id(id)
     if tools:
+        if not can_read_resource(user, tools):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
         if id in request.app.state.TOOLS:
             tools_module = request.app.state.TOOLS[id]
         else:
@@ -535,6 +544,11 @@ async def update_tools_user_valves_by_id(
     tools = Tools.get_tool_by_id(id)
 
     if tools:
+        if not can_read_resource(user, tools):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
         if id in request.app.state.TOOLS:
             tools_module = request.app.state.TOOLS[id]
         else:

@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from open_webui.internal.db import Base, JSONField, get_db
 
@@ -13,6 +13,28 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import BigInteger, Column, String, Text
 
 log = logging.getLogger(__name__)
+
+
+def _as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _deep_merge_dict(current: dict, patch: dict) -> dict:
+    merged = dict(current)
+
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(_as_dict(merged.get(key)), value)
+        else:
+            merged[key] = value
+
+    return merged
+
+
+class UserSettingsRevisionConflict(Exception):
+    def __init__(self, current_revision: int):
+        self.current_revision = current_revision
+        super().__init__("User settings revision conflict")
 
 ####################
 # User DB Schema
@@ -42,6 +64,14 @@ class User(Base):
 
 class UserSettings(BaseModel):
     ui: Optional[dict] = {}
+    revision: int = 0
+    model_config = ConfigDict(extra="allow")
+    pass
+
+
+class UserSettingsUpdateForm(BaseModel):
+    ui: Optional[dict] = None
+    revision: Optional[int] = None
     model_config = ConfigDict(extra="allow")
     pass
 
@@ -290,20 +320,41 @@ class UsersTable:
             return None
 
     def update_user_settings_by_id(self, id: str, updated: dict) -> Optional[UserModel]:
+        return self.patch_user_settings_by_id(id, updated)
+
+    def patch_user_settings_by_id(
+        self,
+        id: str,
+        updated: dict,
+        expected_revision: Optional[int] = None,
+    ) -> Optional[UserModel]:
         try:
             with get_db() as db:
-                user_settings = db.query(User).filter_by(id=id).first().settings
+                user = db.query(User).filter_by(id=id).with_for_update().first()
+                if user is None:
+                    return None
 
-                if user_settings is None:
-                    user_settings = {}
+                user_settings = _as_dict(user.settings)
+                current_revision = int(user_settings.get("revision") or 0)
 
-                user_settings.update(updated)
+                if (
+                    expected_revision is not None
+                    and int(expected_revision) != current_revision
+                ):
+                    raise UserSettingsRevisionConflict(current_revision)
 
-                db.query(User).filter_by(id=id).update({"settings": user_settings})
+                next_settings = _deep_merge_dict(user_settings, _as_dict(updated))
+                next_settings["revision"] = current_revision + 1
+
+                user.settings = next_settings
+                user.updated_at = int(time.time())
+                db.add(user)
                 db.commit()
+                db.refresh(user)
 
-                user = db.query(User).filter_by(id=id).first()
                 return UserModel.model_validate(user)
+        except UserSettingsRevisionConflict:
+            raise
         except Exception:
             return None
 

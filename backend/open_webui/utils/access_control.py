@@ -1,9 +1,11 @@
 from typing import Optional, Union, List, Dict, Any
+from fastapi import HTTPException, Request, status
 from open_webui.models.users import Users, UserModel
 from open_webui.models.groups import Groups
 
 
 from open_webui.config import DEFAULT_USER_PERMISSIONS
+from open_webui.constants import ERROR_MESSAGES
 import json
 
 
@@ -126,6 +128,145 @@ def has_access(
 
     return user_id in permitted_user_ids or any(
         group_id in permitted_group_ids for group_id in user_group_ids
+    )
+
+
+def _get_user_id(user: Union[str, Any]) -> str:
+    if isinstance(user, str):
+        return user
+    return str(getattr(user, "id", "") or "")
+
+
+def _get_user_role(user: Any) -> str:
+    return str(getattr(user, "role", "") or "")
+
+
+def is_admin_user(user: Any) -> bool:
+    return _get_user_role(user) == "admin"
+
+
+def is_resource_owner(user: Any, resource: Any) -> bool:
+    return _get_user_id(user) == str(getattr(resource, "user_id", "") or "")
+
+
+def normalize_access_control(access_control: Optional[dict]) -> Optional[dict]:
+    if access_control is None:
+        return None
+
+    access_control = access_control if isinstance(access_control, dict) else {}
+
+    def _normalize_ids(values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        normalized = []
+        seen = set()
+        for value in values:
+            if value is None:
+                continue
+            item = str(value)
+            if item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return sorted(normalized)
+
+    normalized = {}
+    for permission in ("read", "write"):
+        permission_access = access_control.get(permission, {})
+        permission_access = (
+            permission_access if isinstance(permission_access, dict) else {}
+        )
+        normalized[permission] = {
+            "group_ids": _normalize_ids(permission_access.get("group_ids", [])),
+            "user_ids": _normalize_ids(permission_access.get("user_ids", [])),
+        }
+
+    return normalized
+
+
+def access_control_changed(
+    current_access_control: Optional[dict], next_access_control: Optional[dict]
+) -> bool:
+    return normalize_access_control(current_access_control) != normalize_access_control(
+        next_access_control
+    )
+
+
+def can_read_resource(user: Any, resource: Any) -> bool:
+    if resource is None:
+        return False
+    if is_admin_user(user) or is_resource_owner(user, resource):
+        return True
+    return has_access(
+        _get_user_id(user),
+        "read",
+        getattr(resource, "access_control", None),
+    )
+
+
+def can_write_resource(user: Any, resource: Any) -> bool:
+    if resource is None:
+        return False
+    if is_admin_user(user) or is_resource_owner(user, resource):
+        return True
+    return has_access(
+        _get_user_id(user),
+        "write",
+        getattr(resource, "access_control", None),
+    )
+
+
+def can_manage_resource_acl(user: Any, resource: Any) -> bool:
+    if resource is None:
+        return False
+    return is_admin_user(user) or is_resource_owner(user, resource)
+
+
+def ensure_requested_access_control_allowed(
+    request: Request,
+    user: Any,
+    requested_access_control: Optional[dict],
+    public_permission_key: Optional[str] = None,
+) -> None:
+    if requested_access_control is not None or is_admin_user(user):
+        return
+
+    if public_permission_key and has_permission(
+        _get_user_id(user),
+        public_permission_key,
+        request.app.state.config.USER_PERMISSIONS,
+    ):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+    )
+
+
+def ensure_resource_acl_change_allowed(
+    request: Request,
+    user: Any,
+    resource: Any,
+    requested_access_control: Optional[dict],
+    public_permission_key: Optional[str] = None,
+) -> None:
+    if not access_control_changed(
+        getattr(resource, "access_control", None), requested_access_control
+    ):
+        return
+
+    if not can_manage_resource_acl(user, resource):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        requested_access_control,
+        public_permission_key=public_permission_key,
     )
 
 

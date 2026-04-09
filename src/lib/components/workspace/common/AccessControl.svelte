@@ -5,8 +5,6 @@
 
 	import { getGroups } from '$lib/apis/groups';
 	import { getUsers } from '$lib/apis/users';
-	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import Plus from '$lib/components/icons/Plus.svelte';
 	import UserCircleSolid from '$lib/components/icons/UserCircleSolid.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Badge from '$lib/components/common/Badge.svelte';
@@ -18,57 +16,46 @@
 	export let accessControl = {};
 
 	export let allowPublic = true;
+	export let allowGroupSelection = true;
+	export let allowUserSelection = true;
+	export let readOnly = false;
 
 	let selectedGroupId = '';
 	let selectedUserId = '';
 	let groups = [];
 	let users = [];
 
-	$: if (!allowPublic && accessControl === null) {
-		accessControl = {
-			read: {
-				group_ids: [],
-				user_ids: []
-			},
-			write: {
-				group_ids: [],
-				user_ids: []
-			}
-		};
-		onChange(accessControl);
-	}
+	const createPrivateAccessControl = () => ({
+		read: {
+			group_ids: [],
+			user_ids: []
+		},
+		write: {
+			group_ids: [],
+			user_ids: []
+		}
+	});
 
-	onMount(async () => {
-		groups = await getGroups(localStorage.token);
-		users = await getUsers(localStorage.token).catch(() => []);
-
-		if (accessControl === null) {
-			if (allowPublic) {
-				accessControl = null;
-			} else {
-				accessControl = {
+	const normalizeAccessControl = (value) =>
+		value === null
+			? null
+			: {
 					read: {
-						group_ids: [],
-						user_ids: []
+						group_ids: value?.read?.group_ids ?? [],
+						user_ids: value?.read?.user_ids ?? []
 					},
 					write: {
-						group_ids: [],
-						user_ids: []
+						group_ids: value?.write?.group_ids ?? [],
+						user_ids: value?.write?.user_ids ?? []
 					}
 				};
-				onChange(accessControl);
-			}
-		} else {
-			accessControl = {
-				read: {
-					group_ids: accessControl?.read?.group_ids ?? [],
-					user_ids: accessControl?.read?.user_ids ?? []
-				},
-				write: {
-					group_ids: accessControl?.write?.group_ids ?? [],
-					user_ids: accessControl?.write?.user_ids ?? []
-				}
-			};
+
+	onMount(async () => {
+		groups = allowGroupSelection ? await getGroups(localStorage.token) : [];
+		users = allowUserSelection ? await getUsers(localStorage.token).catch(() => []) : [];
+
+		if (accessControl !== null) {
+			accessControl = normalizeAccessControl(accessControl);
 		}
 	});
 
@@ -82,30 +69,85 @@
 		onSelectUser();
 	}
 
+	$: visibilityOptions = [
+		{ value: 'private', label: $i18n.t('Private') },
+		...((allowPublic || accessControl === null)
+			? [{ value: 'public', label: $i18n.t('Public') }]
+			: [])
+	];
+
+	$: accessGroups =
+		accessControl !== null
+			? groups.filter((group) => accessControl.read.group_ids.includes(group.id))
+			: [];
+
+	$: accessUsers =
+		accessControl !== null
+			? (users ?? []).filter((user) => accessControl.read.user_ids.includes(user.id))
+			: [];
+
 	const onSelectGroup = () => {
+		if (readOnly) {
+			selectedGroupId = '';
+			return;
+		}
+
 		if (selectedGroupId !== '') {
 			accessControl.read.group_ids = [...accessControl.read.group_ids, selectedGroupId];
-
 			selectedGroupId = '';
 		}
 	};
 
 	const onSelectUser = () => {
+		if (readOnly) {
+			selectedUserId = '';
+			return;
+		}
+
 		if (selectedUserId !== '') {
 			accessControl.read.user_ids = [...accessControl.read.user_ids, selectedUserId];
-
 			selectedUserId = '';
 		}
 	};
+
+	const toggleGroupWrite = (groupId: string) => {
+		if (readOnly || !accessRoles.includes('write')) return;
+		if (accessControl.write.group_ids.includes(groupId)) {
+			accessControl.write.group_ids = accessControl.write.group_ids.filter((id) => id !== groupId);
+		} else {
+			accessControl.write.group_ids = [...accessControl.write.group_ids, groupId];
+		}
+	};
+
+	const removeGroup = (groupId: string) => {
+		if (readOnly) return;
+		accessControl.read.group_ids = accessControl.read.group_ids.filter((id) => id !== groupId);
+		accessControl.write.group_ids = accessControl.write.group_ids.filter((id) => id !== groupId);
+	};
+
+	const toggleUserWrite = (userId: string) => {
+		if (readOnly || !accessRoles.includes('write')) return;
+		if (accessControl.write.user_ids.includes(userId)) {
+			accessControl.write.user_ids = accessControl.write.user_ids.filter((id) => id !== userId);
+		} else {
+			accessControl.write.user_ids = [...accessControl.write.user_ids, userId];
+		}
+	};
+
+	const removeUser = (userId: string) => {
+		if (readOnly) return;
+		accessControl.read.user_ids = accessControl.read.user_ids.filter((id) => id !== userId);
+		accessControl.write.user_ids = accessControl.write.user_ids.filter((id) => id !== userId);
+	};
 </script>
 
-<div class=" rounded-lg flex flex-col gap-2">
-	<div class="">
-		<div class=" text-sm font-semibold mb-1">{$i18n.t('Visibility')}</div>
+<div class="rounded-lg flex flex-col gap-2">
+	<div>
+		<div class="text-sm font-semibold mb-1">{$i18n.t('Visibility')}</div>
 
 		<div class="flex gap-2.5 items-center mb-1">
 			<div>
-				<div class=" p-2 bg-black/5 dark:bg-white/5 rounded-full">
+				<div class="p-2 bg-black/5 dark:bg-white/5 rounded-full">
 					{#if accessControl !== null}
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -141,32 +183,22 @@
 			</div>
 
 			<div>
-			<HaloSelect
-				value={accessControl !== null ? 'private' : 'public'}
-				options={[
-					{ value: 'private', label: $i18n.t('Private') },
-					...(allowPublic ? [{ value: 'public', label: $i18n.t('Public') }] : [])
-				]}
-				className="font-medium w-fit"
-				on:change={(e) => {
-					if (e.detail.value === 'public') {
-						accessControl = null;
-					} else {
-						accessControl = {
-							read: {
-								group_ids: [],
-								user_ids: []
-							},
-							write: {
-								group_ids: [],
-								user_ids: []
-							}
-						};
-					}
-				}}
-			/>
+				<HaloSelect
+					value={accessControl !== null ? 'private' : 'public'}
+					options={visibilityOptions}
+					disabled={readOnly}
+					className="font-medium w-fit"
+					on:change={(e) => {
+						if (readOnly) return;
+						if (e.detail.value === 'public') {
+							accessControl = null;
+						} else {
+							accessControl = createPrivateAccessControl();
+						}
+					}}
+				/>
 
-				<div class=" text-xs text-gray-400 font-medium">
+				<div class="text-xs text-gray-400 font-medium">
 					{#if accessControl !== null}
 						{$i18n.t('Only select users and groups with permission can access')}
 					{:else}
@@ -176,214 +208,161 @@
 			</div>
 		</div>
 	</div>
+
 	{#if accessControl !== null}
-		{@const accessGroups = groups.filter((group) =>
-			accessControl.read.group_ids.includes(group.id)
-		)}
-		<div>
-			<div class="">
-				<div class="flex justify-between mb-1.5">
-					<div class="text-sm font-semibold">
-						{$i18n.t('Groups')}
+		{#if allowGroupSelection}
+			<div>
+				<div>
+					<div class="flex justify-between mb-1.5">
+						<div class="text-sm font-semibold">{$i18n.t('Groups')}</div>
 					</div>
-				</div>
 
-				<div class="mb-1">
-					<div class="flex w-full">
-						<div class="flex flex-1 items-center">
-							<div class="w-full px-0.5">
-							<HaloSelect
-								bind:value={selectedGroupId}
-								options={[
-									{ value: '', label: $i18n.t('Select a group') },
-									...groups.filter((group) => !accessControl.read.group_ids.includes(group.id)).map((group) => ({
-										value: group.id,
-										label: group.name
-									}))
-								]}
-								placeholder={$i18n.t('Select a group')}
-								className="w-full"
-							/>
-							</div>
-							<!-- <div>
-								<Tooltip content={$i18n.t('Add Group')}>
-									<button
-										class=" p-1 rounded-xl bg-transparent dark:hover:bg-white/5 hover:bg-black/5 transition font-medium text-sm flex items-center space-x-1"
-										type="button"
-										on:click={() => {}}
-									>
-										<Plus className="size-3.5" />
-									</button>
-								</Tooltip>
-							</div> -->
-						</div>
-					</div>
-				</div>
-
-				<hr class=" border-gray-100 dark:border-gray-700/10 mt-1.5 mb-2.5 w-full" />
-
-				<div class="flex flex-col gap-2 mb-1 px-0.5">
-					{#if accessGroups.length > 0}
-						{#each accessGroups as group}
-							<div class="flex items-center gap-3 justify-between text-xs w-full transition">
-								<div class="flex items-center gap-1.5 w-full font-medium">
-									<div>
-										<UserCircleSolid className="size-4" />
-									</div>
-
-									<div>
-										{group.name}
-									</div>
-								</div>
-
-								<div class="w-full flex justify-end items-center gap-0.5">
-									<button
-										class=""
-										type="button"
-										on:click={() => {
-											if (accessRoles.includes('write')) {
-												if (accessControl.write.group_ids.includes(group.id)) {
-													accessControl.write.group_ids = accessControl.write.group_ids.filter(
-														(group_id) => group_id !== group.id
-													);
-												} else {
-													accessControl.write.group_ids = [
-														...accessControl.write.group_ids,
-														group.id
-													];
-												}
-											}
-										}}
-									>
-										{#if accessControl.write.group_ids.includes(group.id)}
-											<Badge type={'success'} content={$i18n.t('Write')} />
-										{:else}
-											<Badge type={'info'} content={$i18n.t('Read')} />
-										{/if}
-									</button>
-
-									<button
-										class=" rounded-full p-1 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
-										type="button"
-										on:click={() => {
-											accessControl.read.group_ids = accessControl.read.group_ids.filter(
-												(id) => id !== group.id
-											);
-										}}
-									>
-										<XMark />
-									</button>
+					<div class="mb-1">
+						<div class="flex w-full">
+							<div class="flex flex-1 items-center">
+								<div class="w-full px-0.5">
+									<HaloSelect
+										bind:value={selectedGroupId}
+										disabled={readOnly}
+										options={[
+											{ value: '', label: $i18n.t('Select a group') },
+											...groups
+												.filter((group) => !accessControl.read.group_ids.includes(group.id))
+												.map((group) => ({
+													value: group.id,
+													label: group.name
+												}))
+										]}
+										placeholder={$i18n.t('Select a group')}
+										className="w-full"
+									/>
 								</div>
 							</div>
-						{/each}
-					{:else}
-						<div class="flex items-center justify-center">
-							<div class="text-gray-500 text-xs text-center py-2 px-10">
-								{$i18n.t('No groups with access, add a group to grant access')}
-							</div>
 						</div>
-					{/if}
+					</div>
+
+					<hr class="border-gray-100 dark:border-gray-700/10 mt-1.5 mb-2.5 w-full" />
+
+					<div class="flex flex-col gap-2 mb-1 px-0.5">
+						{#if accessGroups.length > 0}
+							{#each accessGroups as group}
+								<div class="flex items-center gap-3 justify-between text-xs w-full transition">
+									<div class="flex items-center gap-1.5 w-full font-medium">
+										<div>
+											<UserCircleSolid className="size-4" />
+										</div>
+										<div>{group.name}</div>
+									</div>
+
+									<div class="w-full flex justify-end items-center gap-0.5">
+										<button class="" type="button" disabled={readOnly} on:click={() => toggleGroupWrite(group.id)}>
+											{#if accessControl.write.group_ids.includes(group.id)}
+												<Badge type={'success'} content={$i18n.t('Write')} />
+											{:else}
+												<Badge type={'info'} content={$i18n.t('Read')} />
+											{/if}
+										</button>
+
+										<button
+											class="rounded-full p-1 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
+											type="button"
+											disabled={readOnly}
+											on:click={() => removeGroup(group.id)}
+										>
+											<XMark />
+										</button>
+									</div>
+								</div>
+							{/each}
+						{:else}
+							<div class="flex items-center justify-center">
+								<div class="text-gray-500 text-xs text-center py-2 px-10">
+									{$i18n.t('No groups with access, add a group to grant access')}
+								</div>
+							</div>
+						{/if}
+					</div>
 				</div>
 			</div>
-		</div>
+		{/if}
 
-		{@const accessUsers = (users ?? []).filter((user) =>
-			accessControl.read.user_ids.includes(user.id)
-		)}
-		<div>
-			<div class="">
-				<div class="flex justify-between mb-1.5">
-					<div class="text-sm font-semibold">
-						{$i18n.t('Users')}
+		{#if allowUserSelection}
+			<div>
+				<div>
+					<div class="flex justify-between mb-1.5">
+						<div class="text-sm font-semibold">{$i18n.t('Users')}</div>
 					</div>
-				</div>
 
-				<div class="mb-1">
-					<div class="flex w-full">
-						<div class="flex flex-1 items-center">
-							<div class="w-full px-0.5">
-							<HaloSelect
-								bind:value={selectedUserId}
-								options={[
-									{ value: '', label: $i18n.t('Select a user') },
-									...(users ?? []).filter((user) => !accessControl.read.user_ids.includes(user.id)).map((user) => ({
-										value: user.id,
-										label: `${user.name} (${user.email})`
-									}))
-								]}
-								placeholder={$i18n.t('Select a user')}
-								className="w-full"
-							/>
+					<div class="mb-1">
+						<div class="flex w-full">
+							<div class="flex flex-1 items-center">
+								<div class="w-full px-0.5">
+									<HaloSelect
+										bind:value={selectedUserId}
+										disabled={readOnly}
+										options={[
+											{ value: '', label: $i18n.t('Select a user') },
+											...(users ?? [])
+												.filter((user) => !accessControl.read.user_ids.includes(user.id))
+												.map((user) => ({
+													value: user.id,
+													label: `${user.name} (${user.email})`
+												}))
+										]}
+										placeholder={$i18n.t('Select a user')}
+										className="w-full"
+									/>
+								</div>
 							</div>
 						</div>
 					</div>
-				</div>
 
-				<hr class=" border-gray-100 dark:border-gray-700/10 mt-1.5 mb-2.5 w-full" />
+					<hr class="border-gray-100 dark:border-gray-700/10 mt-1.5 mb-2.5 w-full" />
 
-				<div class="flex flex-col gap-2 mb-1 px-0.5">
-					{#if accessUsers.length > 0}
-						{#each accessUsers as user}
-							<div class="flex items-center gap-3 justify-between text-xs w-full transition">
-								<div class="flex items-center gap-1.5 w-full font-medium">
-									<div>
-										<UserCircleSolid className="size-4" />
+					<div class="flex flex-col gap-2 mb-1 px-0.5">
+						{#if accessUsers.length > 0}
+							{#each accessUsers as user}
+								<div class="flex items-center gap-3 justify-between text-xs w-full transition">
+									<div class="flex items-center gap-1.5 w-full font-medium">
+										<div>
+											<UserCircleSolid className="size-4" />
+										</div>
+
+										<div class="truncate" title={user.email}>
+											{user.name}
+										</div>
 									</div>
 
-									<div class="truncate" title={user.email}>
-										{user.name}
+									<div class="w-full flex justify-end items-center gap-0.5">
+										<button class="" type="button" disabled={readOnly} on:click={() => toggleUserWrite(user.id)}>
+											{#if accessControl.write.user_ids.includes(user.id)}
+												<Badge type={'success'} content={$i18n.t('Write')} />
+											{:else}
+												<Badge type={'info'} content={$i18n.t('Read')} />
+											{/if}
+										</button>
+
+										<button
+											class="rounded-full p-1 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
+											type="button"
+											disabled={readOnly}
+											on:click={() => removeUser(user.id)}
+										>
+											<XMark />
+										</button>
 									</div>
 								</div>
-
-								<div class="w-full flex justify-end items-center gap-0.5">
-									<button
-										class=""
-										type="button"
-										on:click={() => {
-											if (accessRoles.includes('write')) {
-												if (accessControl.write.user_ids.includes(user.id)) {
-													accessControl.write.user_ids = accessControl.write.user_ids.filter(
-														(user_id) => user_id !== user.id
-													);
-												} else {
-													accessControl.write.user_ids = [...accessControl.write.user_ids, user.id];
-												}
-											}
-										}}
-									>
-										{#if accessControl.write.user_ids.includes(user.id)}
-											<Badge type={'success'} content={$i18n.t('Write')} />
-										{:else}
-											<Badge type={'info'} content={$i18n.t('Read')} />
-										{/if}
-									</button>
-
-									<button
-										class=" rounded-full p-1 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
-										type="button"
-										on:click={() => {
-											accessControl.read.user_ids = accessControl.read.user_ids.filter(
-												(id) => id !== user.id
-											);
-											accessControl.write.user_ids = accessControl.write.user_ids.filter(
-												(id) => id !== user.id
-											);
-										}}
-									>
-										<XMark />
-									</button>
+							{/each}
+						{:else}
+							<div class="flex items-center justify-center">
+								<div class="text-gray-500 text-xs text-center py-2 px-10">
+									{$i18n.t('No users with access, add a user to grant access')}
 								</div>
 							</div>
-						{/each}
-					{:else}
-						<div class="flex items-center justify-center">
-							<div class="text-gray-500 text-xs text-center py-2 px-10">
-								{$i18n.t('No users with access, add a user to grant access')}
-							</div>
-						</div>
-					{/if}
+						{/if}
+					</div>
 				</div>
 			</div>
-		</div>
+		{/if}
 	{/if}
 </div>

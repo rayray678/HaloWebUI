@@ -1159,7 +1159,13 @@ def test_verify_mcp_server_connection_passes_headers_and_session_token(monkeypat
         captured["kwargs"] = kwargs
         return {
             "server_info": {"name": "verified"},
-            "tools": [{"name": "echo", "description": "Echo"}],
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "Echo",
+                    "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
+                }
+            ],
         }
 
     monkeypatch.setattr(configs_router, "get_mcp_server_data", fake_get_mcp_server_data)
@@ -1184,3 +1190,58 @@ def test_verify_mcp_server_connection_passes_headers_and_session_token(monkeypat
     assert captured["connection"]["headers"] == {"X-API-Key": "abc123"}
     assert captured["kwargs"]["session_token"] == "session-token"
     assert result["tool_count"] == 1
+    assert result["tools"] == [
+        {
+            "name": "echo",
+            "description": "Echo",
+            "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
+        }
+    ]
+
+
+def test_get_mcp_servers_cached_data_returns_selected_verified_snapshots():
+    from open_webui.utils import mcp as mcp_mod
+
+    results = mcp_mod.get_mcp_servers_cached_data(
+        [
+            {
+                "transport_type": "http",
+                "url": "http://one",
+                "config": {"enable": True},
+                "server_info": {"name": "server-one"},
+                "tools": [
+                    {
+                        "name": "echo",
+                        "description": "Echo",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+            {
+                "transport_type": "http",
+                "url": "http://two",
+                "config": {"enable": True},
+                "tools": [],
+            },
+        ],
+        selected_indices={0},
+        strict_selected=True,
+    )
+
+    assert results == [
+        {
+            "idx": 0,
+            "transport_type": "http",
+            "url": "http://one",
+            "command": "",
+            "server_info": {"name": "server-one"},
+            "capabilities": {},
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "Echo",
+                    "inputSchema": {"type": "object"},
+                }
+            ],
+        }
+    ]

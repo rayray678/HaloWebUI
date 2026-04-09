@@ -221,8 +221,9 @@
 			return normalizedArg === '--from' && (args[idx + 1] ?? '').trim().startsWith('git+');
 		});
 	};
-	const getVerifyActionLabel = () =>
-		lastVerifiedSignature ? $i18n.t('Re-verify Connection') : $i18n.t('Verify Connection');
+	$: verifyActionLabel = lastVerifiedSignature
+		? $i18n.t('Re-verify Connection')
+		: $i18n.t('Verify Connection');
 
 	const getPresetRuntimeCapability = (preset: MCPPreset) => {
 		return getRuntimeCommandCapability(preset.command);
@@ -255,7 +256,7 @@
 		return getPresetRuntimeCapability(preset)?.message || preset.runtime_hint;
 	};
 
-	const getManualStdioHint = () =>
+	$: manualStdioHint =
 		runtimeProfile === 'slim'
 			? '当前运行的是官方 slim 轻量版，默认不内置 Node.js / uv。想直接使用常见 stdio MCP，推荐切换到官方 main 镜像；如果你愿意自行安装运行时，也可以继续手动配置。'
 			: 'stdio 命令运行在 HaloWebUI 服务端。请确保服务端已安装对应 runtime；npx 需要 Node.js，uvx 需要 Python + uv。启动中的 stdio MCP 会额外占用内存，空闲后会自动回收。';
@@ -282,9 +283,9 @@
 	$: gitRuntimeCapability = runtimeCapabilities?.commands?.git ?? null;
 	$: missingGitForCurrentStdio =
 		currentStdioUsesGitSource && gitRuntimeCapability?.available === false;
-	const isFormInvalid = () =>
+	$: isFormInvalid =
 		transport_type === 'http'
-			? url.trim() === '' || prepareMCPHeaderItems(headerItems).issues.length > 0
+			? url.trim() === '' || headerValidationIssues.length > 0
 			: command.trim() === '';
 
 	const formatVerifiedAt = (value?: string) => {
@@ -361,6 +362,7 @@
 			base.server_info = verifyResult?.server_info || undefined;
 			base.tool_count = verifyResult?.tool_count ?? undefined;
 			base.verified_at = verifyResult?.verified_at ?? undefined;
+			base.tools = verifyResult?.tools || undefined;
 		}
 
 		return base;
@@ -413,7 +415,7 @@
 			verifyResult = {
 				server_info: connection.server_info ?? {},
 				tool_count: connection.tool_count ?? 0,
-				tools: [],
+				tools: Array.isArray(connection.tools) ? connection.tools : [],
 				verified_at: connection.verified_at
 			};
 			lastVerifiedSignature = buildVerificationSignature();
@@ -462,7 +464,7 @@
 	};
 
 	const verifyHandler = async () => {
-		if (isFormInvalid()) {
+		if (isFormInvalid) {
 			return;
 		}
 
@@ -501,7 +503,7 @@
 	};
 
 	const submitHandler = async () => {
-		if (isFormInvalid()) {
+		if (isFormInvalid) {
 			return;
 		}
 
@@ -673,14 +675,14 @@
 										autocomplete="off"
 										required
 									/>
-									<Tooltip content={getVerifyActionLabel()} className="shrink-0">
+									<Tooltip content={verifyActionLabel} className="shrink-0">
 										<button
 											class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-transparent px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-850"
 											on:click={() => {
 												verifyHandler();
 											}}
 											type="button"
-											disabled={loading || isFormInvalid()}
+											disabled={loading || isFormInvalid}
 										>
 											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 {verifyStatus === 'loading' ? 'animate-spin' : ''}">
 												<path
@@ -689,7 +691,7 @@
 													clip-rule="evenodd"
 												/>
 											</svg>
-											<span>{getVerifyActionLabel()}</span>
+											<span>{verifyActionLabel}</span>
 										</button>
 									</Tooltip>
 								</div>
@@ -711,14 +713,14 @@
 										autocomplete="off"
 										required
 									/>
-									<Tooltip content={getVerifyActionLabel()} className="shrink-0">
+									<Tooltip content={verifyActionLabel} className="shrink-0">
 										<button
 											class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-transparent px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-850"
 											on:click={() => {
 												verifyHandler();
 											}}
 											type="button"
-											disabled={loading || isFormInvalid()}
+											disabled={loading || isFormInvalid}
 										>
 											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 {verifyStatus === 'loading' ? 'animate-spin' : ''}">
 												<path
@@ -727,7 +729,7 @@
 													clip-rule="evenodd"
 												/>
 											</svg>
-											<span>{getVerifyActionLabel()}</span>
+											<span>{verifyActionLabel}</span>
 										</button>
 									</Tooltip>
 								</div>
@@ -826,7 +828,7 @@
 								{/if}
 
 								<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2 leading-relaxed">
-									{getManualStdioHint()}
+									{manualStdioHint}
 								</div>
 							</div>
 						{/if}
@@ -1034,7 +1036,7 @@
 						<button
 							class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
 							type="submit"
-							disabled={loading || isFormInvalid()}
+							disabled={loading || isFormInvalid}
 						>
 							{$i18n.t('Save')}
 						</button>

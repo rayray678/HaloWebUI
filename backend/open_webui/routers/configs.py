@@ -291,6 +291,7 @@ class MCPServerConnection(BaseModel):
     server_info: Optional[dict] = None
     tool_count: Optional[int] = None
     verified_at: Optional[str] = None
+    tools: Optional[list[dict]] = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -323,6 +324,7 @@ def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
         "server_info": connection.server_info,
         "tool_count": connection.tool_count,
         "verified_at": connection.verified_at,
+        "tools": connection.tools,
     }
 
     if connection.transport_type == "stdio":
@@ -427,6 +429,7 @@ async def verify_mcp_server_connection(
                 {
                     "name": t.get("name"),
                     "description": t.get("description"),
+                    "inputSchema": t.get("inputSchema") or {},
                 }
                 for t in tools[:50]
             ],

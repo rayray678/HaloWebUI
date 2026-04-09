@@ -14,7 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.access_control import has_access, has_permission
+from open_webui.utils.access_control import (
+    can_read_resource,
+    can_write_resource,
+    ensure_requested_access_control_allowed,
+    ensure_resource_acl_change_allowed,
+    has_permission,
+)
 
 
 router = APIRouter()
@@ -62,16 +68,12 @@ async def create_new_model(
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_models",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        form_data.access_control,
+        public_permission_key="sharing.public_models",
+    )
 
     model = Models.get_model_by_id(form_data.id)
     if model:
@@ -101,12 +103,12 @@ async def create_new_model(
 async def get_model_by_id(id: str, user=Depends(get_verified_user)):
     model = Models.get_model_by_id(id)
     if model:
-        if (
-            user.role == "admin"
-            or model.user_id == user.id
-            or has_access(user.id, "read", model.access_control)
-        ):
+        if can_read_resource(user, model):
             return model
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
     else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -123,11 +125,7 @@ async def get_model_by_id(id: str, user=Depends(get_verified_user)):
 async def toggle_model_by_id(id: str, user=Depends(get_verified_user)):
     model = Models.get_model_by_id(id)
     if model:
-        if (
-            user.role == "admin"
-            or model.user_id == user.id
-            or has_access(user.id, "write", model.access_control)
-        ):
+        if can_write_resource(user, model):
             model = Models.toggle_model_by_id(id)
 
             if model:
@@ -169,26 +167,22 @@ async def update_model_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        model.user_id != user.id
-        and not has_access(user.id, "write", model.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, model):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_models",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = model.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        model,
+        form_data.access_control,
+        public_permission_key="sharing.public_models",
+    )
 
     model = Models.update_model_by_id(id, form_data)
     return model
@@ -208,14 +202,10 @@ async def delete_model_by_id(id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        user.role != "admin"
-        and model.user_id != user.id
-        and not has_access(user.id, "write", model.access_control)
-    ):
+    if not can_write_resource(user, model):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=ERROR_MESSAGES.UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
     result = Models.delete_model_by_id(id)

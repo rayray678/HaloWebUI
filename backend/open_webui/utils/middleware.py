@@ -103,8 +103,16 @@ from open_webui.utils.misc import (
     prepend_to_first_user_message_content,
     convert_logit_bias_input_to_json,
 )
-from open_webui.utils.tools import get_tools, get_tool_servers_data
-from open_webui.utils.mcp import extract_selected_mcp_indices, get_mcp_servers_data
+from open_webui.utils.tools import (
+    get_tools,
+    get_tool_servers_data,
+    validate_tool_ids_access,
+)
+from open_webui.utils.mcp import (
+    extract_selected_mcp_indices,
+    get_mcp_servers_cached_data,
+    get_mcp_servers_data,
+)
 from open_webui.utils.builtin_tools import get_builtin_tools
 from open_webui.utils.user_tools import (
     MAX_TOOL_CALL_ROUNDS_DEFAULT,
@@ -2672,6 +2680,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     tools_dict = {}
 
     if tool_ids:
+        validate_tool_ids_access(tool_ids, user)
+
         # Ensure server-side toolkits are loaded before resolving tool_ids into callable specs.
         # This keeps /api/chat/completions robust even if /api/tools hasn't been called yet.
         if any(str(tid).startswith("server:") for tid in tool_ids) and not getattr(
@@ -2692,13 +2702,25 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             request.state.MCP_SERVER_CONNECTIONS = get_user_mcp_server_connections(
                 request, user
             )
-            request.state.MCP_SERVERS = await get_mcp_servers_data(
-                request.state.MCP_SERVER_CONNECTIONS,
-                session_token=request.state.token.credentials,
-                selected_indices=selected_mcp_indices,
-                strict_selected=True,
-                user_id=user.id,
-            )
+            try:
+                request.state.MCP_SERVERS = await get_mcp_servers_data(
+                    request.state.MCP_SERVER_CONNECTIONS,
+                    session_token=request.state.token.credentials,
+                    selected_indices=selected_mcp_indices,
+                    strict_selected=True,
+                    user_id=user.id,
+                )
+            except RuntimeError as exc:
+                log.warning(
+                    "Falling back to cached MCP tool snapshot for selected servers %s: %s",
+                    sorted(selected_mcp_indices),
+                    exc,
+                )
+                request.state.MCP_SERVERS = get_mcp_servers_cached_data(
+                    request.state.MCP_SERVER_CONNECTIONS,
+                    selected_indices=selected_mcp_indices,
+                    strict_selected=True,
+                )
 
         tools_dict = get_tools(
             request,

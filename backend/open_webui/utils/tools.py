@@ -25,7 +25,7 @@ from typing import (
 from functools import update_wrapper, partial
 
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, Field, create_model
 
 from langchain_core.utils.function_calling import (
@@ -35,6 +35,8 @@ from langchain_core.utils.function_calling import (
 
 from open_webui.models.tools import Tools
 from open_webui.models.users import UserModel
+from open_webui.constants import ERROR_MESSAGES
+from open_webui.utils.access_control import can_read_resource
 from open_webui.utils.plugin import load_tool_module_by_id
 from open_webui.env import AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
 from open_webui.utils.mcp import execute_mcp_tool
@@ -42,6 +44,49 @@ from open_webui.utils.mcp import execute_mcp_tool
 import copy
 
 log = logging.getLogger(__name__)
+
+
+def validate_tool_ids_access(tool_ids: list[str] | None, user: UserModel) -> None:
+    if not tool_ids:
+        return
+
+    missing_tool_ids: list[str] = []
+    denied_tool_ids: list[str] = []
+
+    for tool_id in tool_ids:
+        tool_id = str(tool_id or "").strip()
+        if not tool_id or tool_id.startswith(("server:", "mcp:")):
+            continue
+
+        tool = Tools.get_tool_by_id(tool_id)
+        if tool is None:
+            missing_tool_ids.append(tool_id)
+            continue
+
+        if not can_read_resource(user, tool):
+            denied_tool_ids.append(tool_id)
+
+    if denied_tool_ids:
+        log.warning(
+            "[TOOLS] Access denied for user %s on workspace tools: %s",
+            getattr(user, "id", None),
+            denied_tool_ids,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    if missing_tool_ids:
+        log.warning(
+            "[TOOLS] Missing workspace tools requested by user %s: %s",
+            getattr(user, "id", None),
+            missing_tool_ids,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
 
 
 def get_async_tool_function_and_apply_extra_params(

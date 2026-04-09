@@ -7,9 +7,27 @@
 
 	const dispatch = createEventDispatcher();
 
-	import { config, user, models as _models, temporaryChatEnabled, settings, type Model } from '$lib/stores';
+	import {
+		config,
+		user,
+		models as _models,
+		temporaryChatEnabled,
+		settings,
+		mobile,
+		type Model
+	} from '$lib/stores';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import agentsData from '$lib/data/agents-zh.json';
+	import {
+		type ChatAssistantSnapshot,
+		FEATURED_ASSISTANT_IDS,
+		getFeaturedAssistantIds,
+		setFeaturedAssistantIds,
+		resetFeaturedAssistantIds,
+		MAX_FEATURED_ASSISTANTS,
+		toChatAssistantSnapshot
+	} from '$lib/utils/chat-assistants';
 
 	import Suggestions from './Suggestions.svelte';
 	import ModelIcon from '$lib/components/common/ModelIcon.svelte';
@@ -18,6 +36,13 @@
 	import type { WebSearchMode } from '$lib/utils/web-search-mode';
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
 	import MessageInput from './MessageInput.svelte';
+	import AssistantPickerModal from './AssistantPickerModal.svelte';
+	import Pencil from '$lib/components/icons/Pencil.svelte';
+	import Check from '$lib/components/icons/Check.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
+	import Plus from '$lib/components/icons/Plus.svelte';
+	import ArrowLeft from '$lib/components/icons/ArrowLeft.svelte';
+	import ArrowRight from '$lib/components/icons/ArrowRight.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -30,6 +55,9 @@
 
 	export let atSelectedModel: Model | undefined;
 	export let selectedModels: [''];
+	export let activeAssistant: ChatAssistantSnapshot | null = null;
+	export let onActivateAssistant: ((assistant: ChatAssistantSnapshot) => void) | null = null;
+	export let onDeactivateAssistant: (() => void) | null = null;
 
 	export let history;
 
@@ -48,6 +76,22 @@
 	export let toolServers = [];
 
 	let models = [];
+	let editMode = false;
+	let showPickerModal = false;
+	let featuredIds = [...FEATURED_ASSISTANT_IDS];
+	let dragSourceIdx: number | null = null;
+	let dropTargetIdx: number | null = null;
+	let isMobileSortingMode = false;
+	let featuredAssistants: ChatAssistantSnapshot[] = [];
+
+	$: isMobileSortingMode = $mobile;
+	$: featuredAssistants = featuredIds
+		.map((id) =>
+			toChatAssistantSnapshot(
+				agentsData.find((agent) => agent.id === id) as Record<string, unknown> | undefined
+			)
+		)
+		.filter(Boolean) as ChatAssistantSnapshot[];
 
 	const selectSuggestionPrompt = async (p) => {
 		let text = p;
@@ -96,7 +140,65 @@
 
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
 
-	onMount(() => {});
+	const persistFeaturedIds = (nextIds: string[]) => {
+		featuredIds = nextIds;
+		dragSourceIdx = null;
+		dropTargetIdx = null;
+		setFeaturedAssistantIds(nextIds);
+	};
+
+	const removeFeaturedAssistant = (assistantId: string) => {
+		persistFeaturedIds(featuredIds.filter((id) => id !== assistantId));
+	};
+
+	const moveFeaturedAssistant = (index: number, direction: -1 | 1) => {
+		const nextIndex = index + direction;
+		if (nextIndex < 0 || nextIndex >= featuredIds.length) {
+			return;
+		}
+
+		const nextIds = [...featuredIds];
+		[nextIds[index], nextIds[nextIndex]] = [nextIds[nextIndex], nextIds[index]];
+		persistFeaturedIds(nextIds);
+	};
+
+	const handleDragStart = (index: number) => {
+		if (isMobileSortingMode) {
+			return;
+		}
+
+		dragSourceIdx = index;
+	};
+
+	const handleDrop = (index: number) => {
+		if (
+			isMobileSortingMode ||
+			dragSourceIdx === null ||
+			dragSourceIdx === index ||
+			dragSourceIdx < 0 ||
+			dragSourceIdx >= featuredIds.length
+		) {
+			dragSourceIdx = null;
+			dropTargetIdx = null;
+			return;
+		}
+
+		const nextIds = [...featuredIds];
+		const [moved] = nextIds.splice(dragSourceIdx, 1);
+		nextIds.splice(index, 0, moved);
+		persistFeaturedIds(nextIds);
+		dragSourceIdx = null;
+		dropTargetIdx = null;
+	};
+
+	const handleResetFeaturedAssistants = () => {
+		resetFeaturedAssistantIds();
+		featuredIds = getFeaturedAssistantIds();
+	};
+
+	onMount(() => {
+		featuredIds = getFeaturedAssistantIds();
+	});
 </script>
 
 <div class="m-auto w-full max-w-6xl px-4 @2xl:px-20 translate-y-2 py-16 text-center">
@@ -199,6 +301,7 @@
 				<MessageInput
 					{history}
 					{selectedModels}
+					{activeAssistant}
 					bind:files
 					bind:prompt
 					bind:autoScroll
@@ -210,6 +313,7 @@
 					bind:atSelectedModel
 					bind:reasoningEffort
 					bind:maxThinkingTokens
+					{onDeactivateAssistant}
 					{toolServers}
 					{transparentBackground}
 					{stopResponse}
@@ -225,6 +329,156 @@
 			</div>
 		</div>
 	</div>
+	{#if !activeAssistant && onActivateAssistant}
+		<div class="mx-auto mt-1 w-full max-w-4xl px-2" in:fade={{ duration: 160, delay: 120 }}>
+			<div class="rounded-3xl border border-gray-200/60 bg-white/65 p-3 text-left shadow-sm backdrop-blur-xl dark:border-gray-700/30 dark:bg-white/[0.03]">
+				<div class="flex items-center justify-between gap-3 px-1">
+					<div class="text-xs font-medium text-gray-500 dark:text-gray-400">精选助手</div>
+					<button
+						class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+						on:click={() => {
+							editMode = !editMode;
+							dragSourceIdx = null;
+							dropTargetIdx = null;
+						}}
+					>
+						{#if editMode}
+							<Check className="size-3.5" strokeWidth="2.25" />
+							<span>完成</span>
+						{:else}
+							<Pencil className="size-3.5" strokeWidth="2.1" />
+							<span>管理</span>
+						{/if}
+					</button>
+				</div>
+				<div class="mt-2 grid grid-cols-1 gap-2 @md:grid-cols-2 @xl:grid-cols-3">
+					{#each featuredAssistants as assistant, index}
+						<div
+							class="group relative rounded-2xl border bg-gray-50/90 px-3 py-3 text-left transition dark:bg-gray-900/50 {editMode
+								? dropTargetIdx === index && !isMobileSortingMode
+									? 'border-primary-300 bg-primary-50/60 dark:border-primary-700/60 dark:bg-primary-950/20'
+									: 'border-gray-200/70 dark:border-gray-700/60'
+								: 'border-transparent hover:border-primary-200/70 hover:bg-primary-50/70 dark:hover:border-primary-700/50 dark:hover:bg-primary-950/20'}"
+							draggable={editMode && !isMobileSortingMode}
+							on:dragstart={(e) => {
+								e.dataTransfer?.setData('text/plain', assistant.id);
+								if (e.dataTransfer) {
+									e.dataTransfer.effectAllowed = 'move';
+								}
+								handleDragStart(index);
+							}}
+							on:dragover|preventDefault={(e) => {
+								if (editMode && !isMobileSortingMode) {
+									if (e.dataTransfer) {
+										e.dataTransfer.dropEffect = 'move';
+									}
+									dropTargetIdx = index;
+								}
+							}}
+							on:dragleave={() => {
+								if (dropTargetIdx === index) {
+									dropTargetIdx = null;
+								}
+							}}
+							on:dragend={() => {
+								dragSourceIdx = null;
+								dropTargetIdx = null;
+							}}
+							on:drop|preventDefault={() => handleDrop(index)}
+						>
+							{#if editMode}
+								<div class="absolute right-2 top-2 z-10 flex items-center gap-1">
+									{#if isMobileSortingMode}
+										<button
+											class="rounded-full bg-white/90 p-1 text-gray-500 shadow-sm transition hover:bg-white hover:text-gray-700 dark:bg-gray-800/90 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+											on:click={() => moveFeaturedAssistant(index, -1)}
+											disabled={index === 0}
+											aria-label="Move Left"
+										>
+											<ArrowLeft className="size-3.5" strokeWidth="2.2" />
+										</button>
+										<button
+											class="rounded-full bg-white/90 p-1 text-gray-500 shadow-sm transition hover:bg-white hover:text-gray-700 dark:bg-gray-800/90 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+											on:click={() => moveFeaturedAssistant(index, 1)}
+											disabled={index === featuredAssistants.length - 1}
+											aria-label="Move Right"
+										>
+											<ArrowRight className="size-3.5" strokeWidth="2.2" />
+										</button>
+									{/if}
+									<button
+										class="rounded-full bg-white/90 p-1 text-gray-500 shadow-sm transition hover:bg-white hover:text-red-600 dark:bg-gray-800/90 dark:hover:bg-gray-800 dark:hover:text-red-400"
+										on:click={() => removeFeaturedAssistant(assistant.id)}
+										aria-label="Remove Assistant"
+									>
+										<XMark className="size-3.5" strokeWidth="2.4" />
+									</button>
+								</div>
+							{/if}
+
+							<button
+								class="flex w-full items-start gap-2.5 text-left"
+								on:click={() => {
+									if (!editMode) {
+										onActivateAssistant(assistant);
+									}
+								}}
+								disabled={editMode}
+							>
+								<div class="text-lg leading-none">{assistant.emoji}</div>
+								<div class="min-w-0 flex-1 pr-8">
+									<div class="text-sm font-medium text-gray-800 dark:text-gray-100">
+										{assistant.name}
+									</div>
+									{#if assistant.description}
+										<div class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+											{assistant.description}
+										</div>
+									{/if}
+								</div>
+							</button>
+						</div>
+					{/each}
+
+					{#if editMode && featuredIds.length < MAX_FEATURED_ASSISTANTS}
+						<button
+							class="flex min-h-[104px] items-center justify-center rounded-2xl border border-dashed border-gray-300/80 bg-transparent text-gray-400 transition hover:border-primary-300 hover:text-primary-500 dark:border-gray-700/80 dark:text-gray-500 dark:hover:border-primary-700 dark:hover:text-primary-400"
+							on:click={() => {
+								showPickerModal = true;
+							}}
+						>
+							<div class="flex flex-col items-center gap-2">
+								<div class="rounded-full border border-current p-1">
+									<Plus className="size-4" />
+								</div>
+								<div class="text-xs font-medium">添加助手</div>
+							</div>
+						</button>
+					{/if}
+				</div>
+
+				{#if !editMode && featuredAssistants.length === 0}
+					<div class="mt-2 rounded-2xl border border-dashed border-gray-200/80 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700/70 dark:text-gray-500">
+						暂无精选助手，点击右上角“管理”即可添加
+					</div>
+				{/if}
+
+				{#if editMode}
+					<div class="mt-3 flex items-center justify-between px-1">
+						<div class="text-xs text-gray-400 dark:text-gray-500">
+							最多 {MAX_FEATURED_ASSISTANTS} 个精选助手
+						</div>
+						<button
+							class="text-xs font-medium text-gray-500 transition hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400"
+							on:click={handleResetFeaturedAssistants}
+						>
+							恢复默认
+						</button>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
 	<div class="mx-auto max-w-3xl font-primary" in:fade={{ duration: 200, delay: 200 }}>
 		<div class="mx-4">
 			<Suggestions
@@ -240,3 +494,16 @@
 		</div>
 	</div>
 </div>
+
+<AssistantPickerModal
+	bind:show={showPickerModal}
+	excludeIds={featuredIds}
+	on:select={(e) => {
+		const assistant = e.detail;
+		if (!assistant || featuredIds.includes(assistant.id)) {
+			return;
+		}
+
+		persistFeaturedIds([...featuredIds, assistant.id]);
+	}}
+/>

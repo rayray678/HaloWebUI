@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
 	import { Confetti } from 'svelte-confetti';
+	import { toast } from 'svelte-sonner';
 
-	import { WEBUI_NAME, config, settings } from '$lib/stores';
+	import { WEBUI_NAME, config } from '$lib/stores';
 
 	import { WEBUI_VERSION } from '$lib/constants';
 	import { getChangelog } from '$lib/apis';
+	import { getErrorDetail } from '$lib/apis/response';
 
 	import Modal from './common/Modal.svelte';
-	import { updateUserSettings } from '$lib/apis/users';
+	import { saveUserSettingsPatch } from '$lib/utils/user-settings';
 
 	const i18n = getContext('i18n');
 
@@ -110,9 +112,19 @@
 			<button
 				on:click={async () => {
 					localStorage.version = $config.version;
-					await settings.set({ ...$settings, ...{ version: $config.version } });
-					await updateUserSettings(localStorage.token, { ui: $settings });
-					show = false;
+					try {
+						await saveUserSettingsPatch(localStorage.token, { version: $config.version });
+						show = false;
+					} catch (error) {
+						const isConflict = (error as { status?: number })?.status === 409;
+						toast.error(
+							isConflict
+								? $i18n.t(
+										'Settings changed in another tab. The latest settings have been reloaded; please review and save again.'
+									)
+								: getErrorDetail(error, $i18n.t('Failed to update settings'))
+						);
+					}
 				}}
 				class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
 			>

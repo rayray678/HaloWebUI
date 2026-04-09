@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
-	import { prompts } from '$lib/stores';
+	import { prompts, user } from '$lib/stores';
 	import { onMount, tick, getContext } from 'svelte';
 
 	const i18n = getContext('i18n');
@@ -11,6 +11,20 @@
 	import WorkspaceSubpageHeader from '$lib/components/workspace/shell/WorkspaceSubpageHeader.svelte';
 
 	let prompt = null;
+	const createPrivateAccessControl = () => ({
+		read: {
+			group_ids: [],
+			user_ids: []
+		},
+		write: {
+			group_ids: [],
+			user_ids: []
+		}
+	});
+	$: defaultAccessControl =
+		$user?.permissions?.sharing?.public_prompts || $user?.role === 'admin'
+			? null
+			: createPrivateAccessControl();
 	const onSubmit = async (_prompt) => {
 		const prompt = await createNewPrompt(localStorage.token, _prompt).catch((error) => {
 			toast.error(`${error}`);
@@ -36,14 +50,14 @@
 			const _prompt = JSON.parse(event.data);
 			console.log(_prompt);
 
-			prompt = {
-				name: _prompt.name || _prompt.title || '',
-				command: _prompt.command,
-				content: _prompt.content,
-				tags: _prompt.tags ?? [],
-				access_control: null
-			};
-		});
+				prompt = {
+					name: _prompt.name || _prompt.title || '',
+					command: _prompt.command,
+					content: _prompt.content,
+					tags: _prompt.tags ?? [],
+					access_control: defaultAccessControl
+				};
+			});
 
 		if (window.opener ?? false) {
 			window.opener.postMessage('loaded', '*');
@@ -52,13 +66,13 @@
 		if (sessionStorage.prompt) {
 			const _prompt = JSON.parse(sessionStorage.prompt);
 
-			prompt = {
-				name: _prompt.name || _prompt.title || '',
-				command: _prompt.command,
-				content: _prompt.content,
-				tags: _prompt.tags ?? [],
-				access_control: null
-			};
+				prompt = {
+					name: _prompt.name || _prompt.title || '',
+					command: _prompt.command,
+					content: _prompt.content,
+					tags: _prompt.tags ?? [],
+					access_control: defaultAccessControl
+				};
 			sessionStorage.removeItem('prompt');
 		}
 	});

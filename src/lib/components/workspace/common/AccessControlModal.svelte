@@ -9,6 +9,9 @@
 	export let accessControl = {};
 	export let accessRoles = ['read'];
 	export let allowPublic = true;
+	export let allowGroupSelection = true;
+	export let allowUserSelection = true;
+	export let readOnly = false;
 
 	export let onChange = () => {};
 </script>
@@ -38,8 +41,16 @@
 			</button>
 		</div>
 
-		<div class="w-full px-5 pb-4 dark:text-white">
-			<AccessControl bind:accessControl {onChange} {accessRoles} {allowPublic} />
+			<div class="w-full px-5 pb-4 dark:text-white">
+				<AccessControl
+					bind:accessControl
+					{onChange}
+					{accessRoles}
+					{allowPublic}
+					{allowGroupSelection}
+					{allowUserSelection}
+					{readOnly}
+				/>
+			</div>
 		</div>
-	</div>
-</Modal>
+	</Modal>

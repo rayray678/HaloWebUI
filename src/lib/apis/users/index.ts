@@ -2,6 +2,18 @@ import { WEBUI_API_BASE_URL } from '$lib/constants';
 import { getUserPosition } from '$lib/utils';
 import { parseBlobResponse, parseJsonResponse } from '../response';
 
+export type UserSettingsPayload = {
+	ui?: Record<string, any>;
+	revision?: number;
+	[key: string]: any;
+};
+
+export type UserSettingsUpdatePayload = {
+	ui?: Record<string, any>;
+	revision?: number | null;
+	[key: string]: any;
+};
+
 export const exportUsersCsv = async (token: string) => {
 	const res = await fetch(`${WEBUI_API_BASE_URL}/users/export/csv`, {
 		method: 'GET',
@@ -146,7 +158,7 @@ export const getUsers = async (token: string) => {
 	return res ? res : [];
 };
 
-export const getUserSettings = async (token: string) => {
+export const getUserSettings = async (token: string): Promise<UserSettingsPayload | null> => {
 	let error = null;
 	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/settings`, {
 		method: 'GET',
@@ -169,7 +181,10 @@ export const getUserSettings = async (token: string) => {
 	return res;
 };
 
-export const updateUserSettings = async (token: string, settings: object) => {
+export const updateUserSettings = async (
+	token: string,
+	settings: UserSettingsUpdatePayload
+): Promise<UserSettingsPayload | null> => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/settings/update`, {

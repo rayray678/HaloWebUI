@@ -89,6 +89,7 @@
 	let editingSkill: SkillModel | null = null;
 	let deletingSkill: SkillModel | null = null;
 	let accessControl: Record<string, any> | null = null;
+	$: canManageAcl = !editingSkill || $user?.role === 'admin' || editingSkill.user_id === $user?.id;
 	let skillForm = {
 		name: '',
 		description: '',
@@ -599,6 +600,8 @@
 	bind:accessControl
 	accessRoles={['read', 'write']}
 	allowPublic={$user?.role === 'admin'}
+	allowUserSelection={$user?.role === 'admin'}
+	readOnly={!canManageAcl}
 />
 
 {#if !loaded}
@@ -1497,11 +1500,15 @@
 			</div>
 		</div>
 
-		<div class="flex items-center justify-between gap-3 border-t border-gray-100 px-6 py-4 dark:border-gray-800">
-			<button
-				class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-850"
-				on:click={() => (showAccessControlModal = true)}
-			>
+			<div class="flex items-center justify-between gap-3 border-t border-gray-100 px-6 py-4 dark:border-gray-800">
+				<button
+					class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:hover:bg-transparent dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-850 dark:disabled:hover:bg-transparent disabled:opacity-60 disabled:cursor-not-allowed"
+					disabled={!canManageAcl}
+					on:click={() => {
+						if (!canManageAcl) return;
+						showAccessControlModal = true;
+					}}
+				>
 				<LockClosed className="size-4" />
 				{accessControl === null ? $i18n.t('Public') : $i18n.t('Restricted')}
 			</button>

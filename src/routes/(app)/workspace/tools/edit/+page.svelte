@@ -81,12 +81,13 @@
 			descKey="Update tool logic, manifest details, and access settings without leaving the workspace."
 		/>
 
-		<ToolkitEditor
-			edit={true}
-			id={tool.id}
-			name={tool.name}
-			meta={tool.meta}
-			content={tool.content}
+			<ToolkitEditor
+				edit={true}
+				id={tool.id}
+				ownerId={tool.user_id}
+				name={tool.name}
+				meta={tool.meta}
+				content={tool.content}
 			accessControl={tool.access_control}
 			showBackButton={false}
 			onSave={(value) => {

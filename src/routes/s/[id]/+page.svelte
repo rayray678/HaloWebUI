@@ -5,7 +5,7 @@
 
 	import dayjs from 'dayjs';
 
-	import { settings, chatId, WEBUI_NAME } from '$lib/stores';
+	import { settings, settingsRevision, chatId, WEBUI_NAME } from '$lib/stores';
 	import { convertMessagesToHistory, createMessagesList } from '$lib/utils';
 
 	import { getChatByShareId, cloneSharedChatById } from '$lib/apis/chats';
@@ -17,6 +17,7 @@
 	import { toast } from 'svelte-sonner';
 	import localizedFormat from 'dayjs/plugin/localizedFormat';
 	import { ensureModels } from '$lib/services/models';
+	import { applyUserSettingsSnapshot } from '$lib/utils/user-settings';
 
 	const i18n = getContext('i18n');
 	dayjs.extend(localizedFormat);
@@ -67,17 +68,10 @@
 		});
 
 		if (userSettings) {
-			settings.set(userSettings.ui);
+			applyUserSettingsSnapshot(userSettings, {});
 		} else {
-			let localStorageSettings = {} as Parameters<(typeof settings)['set']>[0];
-
-			try {
-				localStorageSettings = JSON.parse(localStorage.getItem('settings') ?? '{}');
-			} catch (e: unknown) {
-				console.error('Failed to parse settings from localStorage', e);
-			}
-
-			settings.set(localStorageSettings);
+			settings.set({});
+			settingsRevision.set(0);
 		}
 
 		void ensureModels(localStorage.token, { reason: 'shared-chat' }).catch(() => {});

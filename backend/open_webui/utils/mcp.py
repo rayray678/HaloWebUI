@@ -1700,12 +1700,65 @@ def get_mcp_servers_cached_meta(servers: List[Dict[str, Any]]) -> List[Dict[str,
                 "server_info": deepcopy(server.get("server_info") or {}),
                 "tool_count": server.get("tool_count"),
                 "verified_at": server.get("verified_at"),
+                "tools": deepcopy(server.get("tools") or []),
                 "config": deepcopy(server.get("config") or {}),
                 "name": server.get("name"),
                 "description": server.get("description"),
                 "auth_type": server.get("auth_type"),
             }
         )
+    return results
+
+
+def get_mcp_servers_cached_data(
+    servers: List[Dict[str, Any]],
+    *,
+    selected_indices: Optional[Set[int]] = None,
+    strict_selected: bool = False,
+) -> List[Dict[str, Any]]:
+    cached_meta = get_mcp_servers_cached_meta(servers)
+
+    if selected_indices is not None:
+        invalid_selected = sorted(
+            idx for idx in selected_indices if idx < 0 or idx >= len(servers)
+        )
+        if invalid_selected and strict_selected:
+            raise RuntimeError(USER_FACING_SELECTION_ERROR)
+
+        disabled_selected = sorted(
+            idx
+            for idx in selected_indices
+            if 0 <= idx < len(servers) and not _is_enabled(servers[idx])
+        )
+        if disabled_selected and strict_selected:
+            raise RuntimeError(USER_FACING_SELECTION_ERROR)
+
+    selected_indices_set = selected_indices or set()
+    results: List[Dict[str, Any]] = []
+
+    for server in cached_meta:
+        idx = server.get("idx")
+        if not (server.get("config") or {}).get("enable", True):
+            continue
+        if selected_indices is not None and idx not in selected_indices_set:
+            continue
+
+        cached_tools = server.get("tools") or []
+        if strict_selected and idx in selected_indices_set and not cached_tools:
+            raise RuntimeError(USER_FACING_SELECTION_ERROR)
+
+        results.append(
+            {
+                "idx": idx,
+                "transport_type": server.get("transport_type"),
+                "url": server.get("url", ""),
+                "command": server.get("command", ""),
+                "server_info": server.get("server_info", {}) or {},
+                "capabilities": server.get("capabilities", {}) or {},
+                "tools": deepcopy(cached_tools),
+            }
+        )
+
     return results
 
 

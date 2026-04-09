@@ -21,7 +21,13 @@ from open_webui.storage.provider import Storage
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.utils.auth import get_verified_user
-from open_webui.utils.access_control import has_access, has_permission
+from open_webui.utils.access_control import (
+    can_read_resource,
+    can_write_resource,
+    ensure_requested_access_control_allowed,
+    ensure_resource_acl_change_allowed,
+    has_permission,
+)
 from open_webui.utils.file_upload_diagnostics import (
     build_file_upload_error_detail,
     classify_file_upload_error,
@@ -156,16 +162,12 @@ async def create_new_knowledge(
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_knowledge",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        form_data.access_control,
+        public_permission_key="sharing.public_knowledge",
+    )
 
     knowledge = Knowledges.insert_new_knowledge(user.id, form_data)
 
@@ -261,11 +263,7 @@ async def get_knowledge_by_id(id: str, user=Depends(get_verified_user)):
 
     if knowledge:
 
-        if (
-            user.role == "admin"
-            or knowledge.user_id == user.id
-            or has_access(user.id, "read", knowledge.access_control)
-        ):
+        if can_read_resource(user, knowledge):
 
             file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
             files = Files.get_files_by_ids(file_ids)
@@ -299,27 +297,22 @@ async def update_knowledge_by_id(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
-    # Is the user the original creator, in a group with write access, or an admin
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if form_data.access_control is None and user.role != "admin":
-        if not has_permission(
-            user.id,
-            "sharing.public_knowledge",
-            request.app.state.config.USER_PERMISSIONS,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = knowledge.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        knowledge,
+        form_data.access_control,
+        public_permission_key="sharing.public_knowledge",
+    )
 
     knowledge = Knowledges.update_knowledge_by_id(id=id, form_data=form_data)
     if knowledge:
@@ -362,13 +355,9 @@ def add_file_to_knowledge_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -464,14 +453,9 @@ def update_file_from_knowledge_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
-
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -547,13 +531,9 @@ def remove_file_from_knowledge_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -635,13 +615,9 @@ async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -698,13 +674,9 @@ async def reset_knowledge_by_id(id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -741,13 +713,9 @@ def add_files_to_knowledge_batch(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "write", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_write_resource(user, knowledge):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
@@ -832,11 +800,7 @@ async def export_knowledge_by_id(id: str, user=Depends(get_verified_user)):
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    if (
-        knowledge.user_id != user.id
-        and not has_access(user.id, "read", knowledge.access_control)
-        and user.role != "admin"
-    ):
+    if not can_read_resource(user, knowledge):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,

@@ -73,6 +73,7 @@ export const toolServers = writable([]);
 export const banners: Writable<Banner[]> = writable([]);
 
 export const settings: Writable<Settings> = writable({});
+export const settingsRevision = writable(0);
 
 // Cached configs to avoid repeated API calls
 export const ollamaConfigCache = writable(null);

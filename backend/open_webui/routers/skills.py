@@ -10,7 +10,12 @@ from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.models.skills import SkillForm, SkillModel, Skills
 from open_webui.models.tools import Tools
-from open_webui.utils.access_control import has_access
+from open_webui.utils.access_control import (
+    can_read_resource,
+    can_write_resource,
+    ensure_requested_access_control_allowed,
+    ensure_resource_acl_change_allowed,
+)
 from open_webui.utils.auth import get_verified_user
 from open_webui.utils.mcp import (
     get_mcp_server_display_metadata,
@@ -166,11 +171,7 @@ def _filter_visible_skills(skills: list[SkillModel], user) -> list[SkillModel]:
     if user.role == "admin":
         return skills
 
-    return [
-        skill
-        for skill in skills
-        if skill.user_id == user.id or has_access(user.id, "read", skill.access_control)
-    ]
+    return [skill for skill in skills if can_read_resource(user, skill)]
 
 
 def _is_enabled_connection(connection: dict) -> bool:
@@ -534,6 +535,12 @@ async def create_skill(
     form_data: SkillForm,
     user=Depends(get_verified_user),
 ):
+    ensure_requested_access_control_allowed(
+        request,
+        user,
+        form_data.access_control,
+        public_permission_key=None,
+    )
     skill = Skills.insert_new_skill(user.id, form_data)
     if not skill:
         raise HTTPException(
@@ -638,11 +645,10 @@ async def get_skill_by_id(skill_id: str, user=Depends(get_verified_user)):
             status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND
         )
 
-    if skill.user_id != user.id and user.role != "admin":
-        if not has_access(user.id, "read", skill.access_control):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
-            )
+    if not can_read_resource(user, skill):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
+        )
 
     return skill
 
@@ -654,6 +660,7 @@ async def get_skill_by_id(skill_id: str, user=Depends(get_verified_user)):
 
 @router.post("/{skill_id}/update", response_model=SkillModel)
 async def update_skill_by_id(
+    request: Request,
     skill_id: str,
     form_data: SkillForm,
     user=Depends(get_verified_user),
@@ -664,11 +671,21 @@ async def update_skill_by_id(
             status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND
         )
 
-    if skill.user_id != user.id and user.role != "admin":
-        if not has_access(user.id, "write", skill.access_control):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
-            )
+    if not can_write_resource(user, skill):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
+        )
+
+    if "access_control" not in getattr(form_data, "model_fields_set", set()):
+        form_data.access_control = skill.access_control
+
+    ensure_resource_acl_change_allowed(
+        request,
+        user,
+        skill,
+        form_data.access_control,
+        public_permission_key=None,
+    )
 
     updated = Skills.update_skill_by_id(skill_id, form_data)
     if not updated:
@@ -692,7 +709,7 @@ async def delete_skill_by_id(skill_id: str, user=Depends(get_verified_user)):
             status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND
         )
 
-    if skill.user_id != user.id and user.role != "admin":
+    if not can_write_resource(user, skill):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
         )

@@ -11,7 +11,10 @@ from open_webui.models.users import (
     UserRoleUpdateForm,
     Users,
     UserSettings,
+    UserSettingsRevisionConflict,
+    UserSettingsUpdateForm,
     UserUpdateForm,
+    _deep_merge_dict,
 )
 
 
@@ -236,15 +239,45 @@ async def get_user_settings_by_session_user(request: Request, user=Depends(get_v
 @router.post("/user/settings/update", response_model=UserSettings)
 async def update_user_settings_by_session_user(
     request: Request,
-    form_data: UserSettings,
+    form_data: UserSettingsUpdateForm,
     user=Depends(get_verified_user),
 ):
     existing_user = Users.get_user_by_id(user.id)
-    connections_changed = _get_ui_connections(
-        getattr(existing_user, "settings", None)
-    ) != _get_ui_connections(form_data)
+    if existing_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.USER_NOT_FOUND,
+        )
 
-    user = Users.update_user_settings_by_id(user.id, form_data.model_dump())
+    existing_settings = getattr(existing_user, "settings", None)
+    if existing_settings is None:
+        existing_settings_dict = {}
+    elif hasattr(existing_settings, "model_dump"):
+        existing_settings_dict = _as_dict(existing_settings.model_dump())
+    else:
+        existing_settings_dict = _as_dict(existing_settings)
+
+    patch_payload = form_data.model_dump(exclude={"revision"}, exclude_none=True)
+    if not patch_payload:
+        return existing_user.settings or UserSettings()
+
+    next_settings_dict = _deep_merge_dict(existing_settings_dict, patch_payload)
+    connections_changed = _get_ui_connections(existing_settings_dict) != _get_ui_connections(
+        next_settings_dict
+    )
+
+    try:
+        user = Users.patch_user_settings_by_id(
+            user.id,
+            patch_payload,
+            expected_revision=form_data.revision,
+        )
+    except UserSettingsRevisionConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User settings were updated elsewhere. Please retry with the latest settings.",
+        )
+
     if user:
         invalidate_cached_user(user.id)
 

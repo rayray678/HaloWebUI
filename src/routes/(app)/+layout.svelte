@@ -30,6 +30,7 @@
 		config,
 		user,
 		settings,
+		settingsRevision,
 		prompts,
 		knowledge,
 		tools,
@@ -47,6 +48,7 @@
 	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
 	import { get } from 'svelte/store';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import { applyUserSettingsSnapshot } from '$lib/utils/user-settings';
 
 	const i18n = getContext('i18n');
 
@@ -115,31 +117,28 @@
 				}),
 				getTools(localStorage.token).catch((e) => {
 					console.error('Failed to load tools', e);
-					return [];
+					return null;
 				}),
 				getFunctions(localStorage.token).catch((e) => {
 					console.error('Failed to load functions', e);
-					return [];
+					return null;
 				})
 			]);
 
 			if (userSettings) {
-				settings.set(userSettings.ui);
+				applyUserSettingsSnapshot(userSettings, {});
 			} else {
-				let localStorageSettings = {} as Parameters<(typeof settings)['set']>[0];
-
-				try {
-					localStorageSettings = JSON.parse(localStorage.getItem('settings') ?? '{}');
-				} catch (e: unknown) {
-					console.error('Failed to parse settings from localStorage', e);
-				}
-
-				settings.set(localStorageSettings);
+				settings.set({});
+				settingsRevision.set(0);
 			}
 
 			banners.set(bannersData);
-			tools.set(toolsData);
-			functions.set(functionsData);
+			if (Array.isArray(toolsData)) {
+				tools.set(toolsData);
+			}
+			if (Array.isArray(functionsData)) {
+				functions.set(functionsData);
+			}
 
 			// toolServers depends on $settings being set, so it runs after the parallel batch
 			toolServers.set(

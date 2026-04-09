@@ -6,10 +6,15 @@
 
 	import Search from '../icons/Search.svelte';
 	import Plus from '../icons/Plus.svelte';
+	import ChatBubbleOval from '../icons/ChatBubbleOval.svelte';
 	import Spinner from '../common/Spinner.svelte';
 	import AssistantDetailModal from './AssistantDetailModal.svelte';
 
 	import agentsData from '$lib/data/agents-zh.json';
+	import {
+		PENDING_ASSISTANT_STORAGE_KEY,
+		toChatAssistantSnapshot
+	} from '$lib/utils/chat-assistants';
 
 	const i18n = getContext('i18n');
 
@@ -75,6 +80,21 @@
 
 		// 跳转到模型创建页面
 		goto('/workspace/models/create');
+	};
+
+	const startChat = (agent: any, fromModal = false) => {
+		const assistant = toChatAssistantSnapshot(agent);
+		if (!assistant) {
+			return;
+		}
+
+		sessionStorage.setItem(PENDING_ASSISTANT_STORAGE_KEY, JSON.stringify(assistant));
+
+		if (fromModal) {
+			showDetailModal = false;
+		}
+
+		goto('/?fresh-chat=true');
 	};
 
 	onMount(() => {
@@ -169,14 +189,24 @@
 								</div>
 							</div>
 
-							<!-- 添加按钮 -->
-							<button
-								class="absolute top-2 right-2 p-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 opacity-0 group-hover:opacity-100 hover:bg-gray-200 dark:hover:bg-gray-700 transition"
-								on:click|stopPropagation={() => addAssistant(agent)}
-								title={$i18n.t('Add to workspace')}
+							<div
+								class="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition"
 							>
-								<Plus className="size-4" />
-							</button>
+								<button
+									class="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition"
+									on:click|stopPropagation={() => startChat(agent)}
+									title={$i18n.t('Start Chat')}
+								>
+									<ChatBubbleOval className="size-4" strokeWidth="2.3" />
+								</button>
+								<button
+									class="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition"
+									on:click|stopPropagation={() => addAssistant(agent)}
+									title={$i18n.t('Add to workspace')}
+								>
+									<Plus className="size-4" />
+								</button>
+							</div>
 
 							<!-- 分组标签 -->
 							{#if agent.group && agent.group.length > 0}
@@ -211,5 +241,6 @@
 <AssistantDetailModal
 	bind:show={showDetailModal}
 	agent={selectedAgent}
+	on:startChat={(e) => startChat(e.detail, true)}
 	on:add={(e) => addAssistant(e.detail, true)}
 />

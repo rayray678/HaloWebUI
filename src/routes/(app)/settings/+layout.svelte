@@ -3,12 +3,13 @@
 	import type { Writable } from 'svelte/store';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { get } from 'svelte/store';
+	import { toast } from 'svelte-sonner';
 
 	import MenuLines from '$lib/components/icons/MenuLines.svelte';
-	import { updateUserSettings } from '$lib/apis/users';
-	import { WEBUI_NAME, config, mobile, settings, showSidebar, user } from '$lib/stores';
+	import { WEBUI_NAME, config, mobile, showSidebar, user } from '$lib/stores';
 	import { ensureModels, refreshModels } from '$lib/services/models';
+	import { getErrorDetail } from '$lib/apis/response';
+	import { saveUserSettingsPatch } from '$lib/utils/user-settings';
 
 	const i18n: Writable<any> = getContext('i18n');
 
@@ -18,15 +19,23 @@
 	};
 
 	const saveSettings = async (updated: any, options: { refreshModels?: boolean } = {}) => {
-		// Svelte stores update synchronously; `get(settings)` after `set` is the updated value.
-		settings.set({ ...get(settings), ...updated });
+		try {
+			await saveUserSettingsPatch(localStorage.token, updated);
 
-		// Persist first so a follow-up model refresh reflects the latest connections/settings.
-		await updateUserSettings(localStorage.token, { ui: get(settings) });
-
-		if (options.refreshModels) {
-			// Refresh model list when settings affect model availability/behavior.
-			await refreshModels(localStorage.token, { force: true, reason: 'settings-save' });
+			if (options.refreshModels) {
+				// Refresh model list when settings affect model availability/behavior.
+				await refreshModels(localStorage.token, { force: true, reason: 'settings-save' });
+			}
+		} catch (error) {
+			const isConflict = (error as { status?: number })?.status === 409;
+			toast.error(
+				isConflict
+					? $i18n.t(
+							'Settings changed in another tab. The latest settings have been reloaded; please review and save again.'
+						)
+					: getErrorDetail(error, $i18n.t('Failed to update settings'))
+			);
+			throw error;
 		}
 	};
 

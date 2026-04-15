@@ -22,7 +22,6 @@
 	} from '$lib/stores';
 
 	import {
-		blobToFile,
 		compressImage,
 		convertHeicToJpeg,
 		createMessagesList,
@@ -484,10 +483,14 @@
 			// bring back focus to this current tab, so that the user can see the screen capture
 			window.focus();
 
-			// Convert the canvas to a Base64 image URL
-			const imageUrl = canvas.toDataURL('image/png');
-			// Add the captured image to the files array to render it
-			files = [...files, { type: 'image', url: imageUrl }];
+			const imageBlob = await new Promise<Blob | null>((resolve) =>
+				canvas.toBlob(resolve, 'image/png')
+			);
+			if (!imageBlob) {
+				throw new Error('Failed to capture screen image');
+			}
+
+			await uploadImageFileHandler(createNamedImageFile(imageBlob, 'Screen_Capture'));
 			// Clean memory: Clear video srcObject
 			video.srcObject = null;
 		} catch (error) {
@@ -499,6 +502,30 @@
 	const getUploadLocalizeOptions = () => ({
 		isAdmin: $_user?.role === 'admin'
 	});
+
+	const IMAGE_INPUT_MIME_TYPES = [
+		'image/gif',
+		'image/webp',
+		'image/jpeg',
+		'image/png',
+		'image/avif'
+	];
+
+	const buildUploadedImageContentUrl = (id: string) => `${WEBUI_API_BASE_URL}/files/${id}/content`;
+
+	const revokePreviewUrl = (value: unknown) => {
+		if (typeof value === 'string' && value.startsWith('blob:')) {
+			URL.revokeObjectURL(value);
+		}
+	};
+
+	const createNamedImageFile = (blob: Blob, namePrefix: string) => {
+		const mimeType = blob.type || 'image/png';
+		const extension = mimeType.split('/').at(1)?.split('+').at(0) || 'png';
+		const existingName = blob instanceof File ? blob.name : '';
+		const filename = existingName || `${namePrefix}_${Date.now()}.${extension}`;
+		return new File([blob], filename, { type: mimeType });
+	};
 
 	const setUploadFailure = (tempItemId: string, error: unknown) => {
 		const localized = getLocalizedFileUploadDiagnostic(
@@ -528,6 +555,72 @@
 		);
 
 		toast.error(localizeFileUploadError(error, $i18n.t.bind($i18n), getUploadLocalizeOptions()));
+	};
+
+	const uploadImageFileHandler = async (file: File) => {
+		if ($_user?.role !== 'admin' && !($_user?.permissions?.chat?.file_upload ?? true)) {
+			toast.error($i18n.t('You do not have permission to upload files.'));
+			return null;
+		}
+
+		const tempItemId = uuidv4();
+		const previewUrl = URL.createObjectURL(file);
+		const fileItem = {
+			type: 'image',
+			id: null,
+			url: '',
+			name: file.name,
+			size: file.size,
+			content_type: file.type,
+			status: 'uploading',
+			error: '',
+			errorTitle: '',
+			errorHint: '',
+			diagnostic: null,
+			itemId: tempItemId,
+			preview_url: previewUrl
+		};
+
+		if (fileItem.size == 0) {
+			revokePreviewUrl(previewUrl);
+			toast.error($i18n.t('You cannot upload an empty file.'));
+			return null;
+		}
+
+		files = [...files, fileItem];
+
+		try {
+			const uploadedFile = await uploadFile(localStorage.token, file, {
+				process: false
+			});
+
+			if (uploadedFile) {
+				if (uploadedFile.error) {
+					toast.warning(
+						localizeFileUploadError(
+							uploadedFile.error,
+							$i18n.t.bind($i18n),
+							getUploadLocalizeOptions()
+						)
+					);
+				}
+
+				fileItem.status = 'uploaded';
+				fileItem.id = uploadedFile.id;
+				fileItem.name = uploadedFile?.meta?.name ?? file.name;
+				fileItem.size = uploadedFile?.meta?.size ?? file.size;
+				fileItem.content_type = uploadedFile?.meta?.content_type ?? file.type;
+				fileItem.url = buildUploadedImageContentUrl(uploadedFile.id);
+				revokePreviewUrl(fileItem.preview_url);
+				delete fileItem.preview_url;
+
+				files = files;
+			} else {
+				setUploadFailure(tempItemId, new Error($i18n.t('Failed to upload file.')));
+			}
+		} catch (e) {
+			setUploadFailure(tempItemId, e);
+		}
 	};
 
 	const uploadFileHandler = async (file, fullContext: boolean = false) => {
@@ -647,38 +740,51 @@
 			}
 
 			if (
-				['image/gif', 'image/webp', 'image/jpeg', 'image/png', 'image/avif'].includes(file['type'])
+				IMAGE_INPUT_MIME_TYPES.includes(file['type'])
 			) {
 				if (visionCapableModels.length === 0) {
 					toast.error($i18n.t('Selected model(s) do not support image inputs'));
 					continue;
 				}
-				let reader = new FileReader();
-				reader.onload = async (event) => {
-					let imageUrl = event.target.result;
+				if (($settings?.imageCompression ?? false) && !isAnimatedImage(file)) {
+					const width = $settings?.imageCompressionSize?.width ?? null;
+					const height = $settings?.imageCompressionSize?.height ?? null;
 
-					if (($settings?.imageCompression ?? false) && !isAnimatedImage(file)) {
-						const width = $settings?.imageCompressionSize?.width ?? null;
-						const height = $settings?.imageCompressionSize?.height ?? null;
-
-						if (width || height) {
-							imageUrl = await compressImage(imageUrl, width, height);
-						}
+					if (width || height) {
+						const tempPreviewUrl = URL.createObjectURL(file);
+						const imageUrl = await compressImage(tempPreviewUrl, width, height).finally(() => {
+							revokePreviewUrl(tempPreviewUrl);
+						});
+						const response = await fetch(imageUrl);
+						const imageBlob = await response.blob();
+						file = createNamedImageFile(imageBlob, file.name.replace(/\.[^.]+$/, '') || 'Image');
 					}
+				}
 
-					files = [
-						...files,
-						{
-							type: 'image',
-							url: `${imageUrl}`
-						}
-					];
-				};
-				reader.readAsDataURL(file);
+				await uploadImageFileHandler(file);
 			} else {
-				uploadFileHandler(file);
+				await uploadFileHandler(file);
 			}
 		}
+	};
+
+	const removeInputFile = async (fileIdx: number) => {
+		const file = files[fileIdx];
+		if (!file) {
+			return;
+		}
+
+		if (file.itemId && file.id && file.type !== 'collection' && !file?.collection) {
+			try {
+				await deleteFileById(localStorage.token, file.id);
+			} catch (error) {
+				console.error('Failed to delete uploaded file:', error);
+			}
+		}
+
+		revokePreviewUrl(file?.preview_url);
+		files.splice(fileIdx, 1);
+		files = files;
 	};
 
 	const handleKeyDown = (event: KeyboardEvent) => {
@@ -711,7 +817,7 @@
 			const inputFiles = Array.from(e.dataTransfer?.files);
 			if (inputFiles && inputFiles.length > 0) {
 				console.log(inputFiles);
-				inputFilesHandler(inputFiles);
+				await inputFilesHandler(inputFiles);
 			}
 		}
 
@@ -786,6 +892,10 @@
 			dropzoneElement?.removeEventListener('dragover', onDragOver);
 			dropzoneElement?.removeEventListener('drop', onDrop);
 			dropzoneElement?.removeEventListener('dragleave', onDragLeave);
+		}
+
+		for (const file of files) {
+			revokePreviewUrl(file?.preview_url);
 		}
 	});
 </script>
@@ -916,7 +1026,7 @@
 						on:change={async () => {
 							if (inputFiles && inputFiles.length > 0) {
 								const _inputFiles = Array.from(inputFiles);
-								inputFilesHandler(_inputFiles);
+								await inputFilesHandler(_inputFiles);
 							} else {
 								toast.error($i18n.t(`File not found.`));
 							}
@@ -976,7 +1086,7 @@
 												<div class="relative group shrink-0">
 													<div class="relative flex items-center rounded-xl ring-1 ring-gray-200/60 dark:ring-white/10">
 														<Image
-															src={file.url}
+															src={file.preview_url || file.url}
 															alt="input"
 															imageClassName=" size-14 rounded-xl object-cover"
 														/>
@@ -1010,9 +1120,8 @@
 														<button
 															class="bg-gray-900/70 dark:bg-gray-700/90 text-white border border-white/20 dark:border-gray-500/30 rounded-full group-hover:visible invisible transition backdrop-blur-sm p-px"
 															type="button"
-															on:click={() => {
-																files.splice(fileIdx, 1);
-																files = files;
+															on:click={async () => {
+																await removeInputFile(fileIdx);
 															}}
 														>
 															<svg
@@ -1039,7 +1148,7 @@
 													dismissible={true}
 													edit={true}
 													on:dismiss={async () => {
-														if (file.type !== 'collection' && !file?.collection) {
+														if (file.itemId && file.type !== 'collection' && !file?.collection) {
 															if (file.id) {
 																// This will handle both file deletion and Chroma cleanup
 																await deleteFileById(localStorage.token, file.id);
@@ -1195,19 +1304,9 @@
 																		continue;
 																	}
 																}
-																const reader = new FileReader();
-
-																reader.onload = function (e) {
-																	files = [
-																		...files,
-																		{
-																			type: 'image',
-																			url: `${e.target.result}`
-																		}
-																	];
-																};
-
-																reader.readAsDataURL(blob);
+																await uploadImageFileHandler(
+																	createNamedImageFile(blob, 'Pasted_Image')
+																);
 															} else if (item.type === 'text/plain') {
 																if ($settings?.largeTextAsFile ?? false) {
 																	const text = clipboardData.getData('text/plain');
@@ -1404,19 +1503,9 @@
 																	continue;
 																}
 															}
-															const reader = new FileReader();
-
-															reader.onload = function (e) {
-																files = [
-																	...files,
-																	{
-																		type: 'image',
-																		url: `${e.target.result}`
-																	}
-																];
-															};
-
-															reader.readAsDataURL(blob);
+															await uploadImageFileHandler(
+																createNamedImageFile(blob, 'Pasted_Image')
+															);
 														} else if (item.type === 'text/plain') {
 															if ($settings?.largeTextAsFile ?? false) {
 																const text = clipboardData.getData('text/plain');

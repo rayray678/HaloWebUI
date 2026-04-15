@@ -45,6 +45,7 @@ from open_webui.models.models import Models
 from open_webui.utils.plugin import load_function_module_by_id
 from open_webui.utils.models import get_all_models, check_model_access
 from open_webui.utils.payload import convert_payload_openai_to_ollama
+from open_webui.utils.chat_image_refs import materialize_openai_image_message_refs
 from open_webui.utils.response import (
     convert_response_ollama_to_openai,
     convert_streaming_response_ollama_to_openai,
@@ -241,6 +242,11 @@ async def generate_chat_completion(
                 request, form_data, user=user, models=models
             )
         if model.get("owned_by") == "ollama":
+            form_data = materialize_openai_image_message_refs(
+                form_data,
+                user_id=user.id,
+                is_admin=user.role == "admin",
+            )
             # Using /ollama/api/chat endpoint
             form_data = convert_payload_openai_to_ollama(form_data)
             response = await generate_ollama_chat_completion(
@@ -273,6 +279,11 @@ async def generate_chat_completion(
                 bypass_filter=bypass_filter,
             )
         else:
+            form_data = materialize_openai_image_message_refs(
+                form_data,
+                user_id=user.id,
+                is_admin=user.role == "admin",
+            )
             return await generate_openai_chat_completion(
                 request=request,
                 form_data=form_data,

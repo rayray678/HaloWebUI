@@ -5,6 +5,7 @@ from typing import Optional
 
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 
@@ -12,6 +13,7 @@ from open_webui.socket.main import sio, get_user_ids_from_room
 from open_webui.models.users import Users, UserNameResponse
 
 from open_webui.models.channels import Channels, ChannelModel, ChannelForm
+from open_webui.models.files import Files
 from open_webui.models.messages import (
     Messages,
     MessageModel,
@@ -26,13 +28,102 @@ from open_webui.env import SRC_LOG_LEVELS
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.access_control import has_access, get_users_with_access
+from open_webui.utils.access_control import (
+    has_access,
+    get_users_with_access,
+    normalize_access_control,
+)
+from open_webui.utils.chat_image_refs import (
+    extract_chat_image_file_id,
+    normalize_chat_message_image_files,
+)
 from open_webui.utils.webhook import post_webhook
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
+
+
+def _normalize_channel_message_form_sync(
+    form_data: MessageForm, user_id: str, is_admin: bool
+) -> MessageForm:
+    payload = form_data.model_dump()
+    data = payload.get("data")
+
+    if not isinstance(data, dict):
+        return form_data
+
+    normalized_files, changed = normalize_chat_message_image_files(
+        data.get("files"),
+        user_id=user_id,
+        is_admin=is_admin,
+    )
+
+    if not changed:
+        return form_data
+
+    payload["data"] = {**data, "files": normalized_files}
+    return MessageForm(**payload)
+
+
+async def _normalize_channel_message_form(
+    form_data: MessageForm, user
+) -> MessageForm:
+    return await run_in_threadpool(
+        lambda: _normalize_channel_message_form_sync(
+            form_data,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
+    )
+
+
+def _build_channel_file_access_control(channel, owner_id: str) -> dict:
+    normalized_channel_acl = normalize_access_control(channel.access_control)
+    read_acl = (
+        {"group_ids": [], "user_ids": ["*"]}
+        if normalized_channel_acl is None
+        else normalized_channel_acl.get(
+            "read", {"group_ids": [], "user_ids": []}
+        )
+    )
+
+    return {
+        "read": read_acl,
+        "write": {"group_ids": [], "user_ids": [owner_id]},
+    }
+
+
+def _share_channel_files_for_message_sync(form_data: MessageForm, channel, user) -> None:
+    data = form_data.data if isinstance(form_data.data, dict) else {}
+    files = data.get("files")
+    if not isinstance(files, list) or not files:
+        return
+
+    access_control = _build_channel_file_access_control(channel, user.id)
+    for file_item in files:
+        if not isinstance(file_item, dict):
+            continue
+
+        file_id = file_item.get("id") or extract_chat_image_file_id(file_item.get("url"))
+        if not file_id:
+            continue
+
+        file_obj = Files.get_file_by_id(file_id)
+        if not file_obj:
+            continue
+
+        if user.role != "admin" and file_obj.user_id != user.id:
+            continue
+
+        Files.update_file_access_control_by_id(file_id, access_control)
+
+
+async def _share_channel_files_for_message(form_data: MessageForm, channel, user) -> None:
+    await run_in_threadpool(
+        lambda: _share_channel_files_for_message_sync(form_data, channel, user)
+    )
 
 ############################
 # GetChatList
@@ -238,9 +329,11 @@ async def post_new_message(
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT()
-        )
+    )
 
     try:
+        form_data = await _normalize_channel_message_form(form_data, user)
+        await _share_channel_files_for_message(form_data, channel, user)
         message = Messages.insert_new_message(form_data, channel.id, user.id)
 
         if message:
@@ -465,9 +558,11 @@ async def update_message_by_id(
     if message.channel_id != id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.DEFAULT()
-        )
+    )
 
     try:
+        form_data = await _normalize_channel_message_form(form_data, user)
+        await _share_channel_files_for_message(form_data, channel, user)
         message = Messages.update_message_by_id(message_id, form_data)
         message = Messages.get_message_by_id(message_id)
 

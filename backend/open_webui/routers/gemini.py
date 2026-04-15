@@ -7,6 +7,7 @@ and converts responses into OpenAI-compatible format for the Open WebUI frontend
 """
 
 import asyncio
+import base64
 import copy
 import codecs
 import json
@@ -45,6 +46,7 @@ from open_webui.utils.payload import (
     apply_model_system_prompt_to_body,
     merge_additive_payload_fields,
 )
+from open_webui.utils.chat_image_refs import resolve_chat_image_url_to_bytes
 from open_webui.utils.error_handling import build_error_detail
 from open_webui.utils.native_web_search import (
     build_native_web_search_support,
@@ -1891,14 +1893,18 @@ async def generate_chat_completion(
                     parts.append({"text": item.get("text", "")})
                 elif item.get("type") == "image_url":
                     image_url = item.get("image_url", {}).get("url", "")
-                    if image_url.startswith("data:"):
-                        header, data = image_url.split(",", 1)
-                        mime_type = header.split(":")[1].split(";")[0]
+                    resolved = resolve_chat_image_url_to_bytes(
+                        image_url,
+                        user_id=user.id,
+                        is_admin=user.role == "admin",
+                    )
+                    if resolved:
+                        mime_type, raw_data = resolved
                         parts.append(
                             {
                                 "inline_data": {
                                     "mime_type": mime_type,
-                                    "data": data,
+                                    "data": base64.b64encode(raw_data).decode("utf-8"),
                                 }
                             }
                         )

@@ -12,7 +12,7 @@
 
 	import { get, writable, type Unsubscriber, type Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
-	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { WEBUI_BASE_URL, WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import {
 		chatId,
@@ -126,6 +126,25 @@
 		localizeFileUploadError
 	} from '$lib/utils/file-upload-errors';
 
+	const MESSAGE_OUTLINE_IDLE_MS = 900;
+	const MESSAGE_OUTLINE_SCROLL_INTENT_WINDOW_MS = 220;
+	const MESSAGE_OUTLINE_SCROLLBAR_DRAG_PRIME_MS = 1400;
+	const MESSAGE_OUTLINE_SCROLL_KEYS = new Set([
+		'ArrowUp',
+		'ArrowDown',
+		'PageUp',
+		'PageDown',
+		'Home',
+		'End',
+		' ',
+		'Spacebar'
+	]);
+
+	type MessageOutlineVisibilityContext = {
+		visibleStore: Writable<boolean>;
+		reveal: () => void;
+	};
+
 	export let chatIdProp = '';
 
 	let loading = false;
@@ -136,6 +155,7 @@
 		parts: string[];
 	};
 	const pendingGeminiImages = new Map<string, Map<string, PendingGeminiImage>>();
+	const OPENWEBUI_FILE_URL_SCHEME = 'openwebui-file://';
 	const buildImageDataUrl = (mimeType: string, data: string) => `data:${mimeType};base64,${data}`;
 	const mergeMessageFiles = (existing: any[] = [], incoming: any[] = []) => {
 		const merged = [];
@@ -152,6 +172,162 @@
 
 		return merged;
 	};
+	const isInlineDataImageUrl = (value: unknown): value is string =>
+		typeof value === 'string' && value.startsWith('data:image/');
+	const buildChatImageContentUrl = (id: string) => `${WEBUI_API_BASE_URL}/files/${id}/content`;
+	const extractChatImageFileId = (file: any): string | null => {
+		const directId = typeof file?.id === 'string' && file.id.trim() ? file.id.trim() : null;
+		if (directId) {
+			return directId;
+		}
+
+		const url = typeof file?.url === 'string' ? file.url : '';
+		const match = url.match(/\/api\/v1\/files\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/);
+		return match?.[1] ?? null;
+	};
+	const sanitizeImageFileRef = (file: any) => {
+		const fileId = extractChatImageFileId(file);
+		const url =
+			fileId !== null
+				? buildChatImageContentUrl(fileId)
+				: typeof file?.url === 'string'
+					? file.url
+					: '';
+
+		if (!url) {
+			return null;
+		}
+
+		return Object.fromEntries(
+			Object.entries({
+				type: 'image',
+				id: fileId ?? undefined,
+				name:
+					typeof file?.name === 'string' && file.name
+						? file.name
+						: file?.file?.meta?.name ?? undefined,
+				url,
+				size:
+					typeof file?.size === 'number'
+						? file.size
+						: file?.file?.meta?.size ?? undefined,
+				content_type:
+					typeof file?.content_type === 'string' && file.content_type
+						? file.content_type
+						: file?.file?.meta?.content_type ?? undefined
+			}).filter(([, value]) => value !== undefined && value !== null && value !== '')
+		);
+	};
+	const buildModelImageRequestUrl = (file: any) => {
+		const fileId = extractChatImageFileId(file);
+		if (fileId) {
+			return `${OPENWEBUI_FILE_URL_SCHEME}${fileId}`;
+		}
+
+		return typeof file?.url === 'string' ? file.url : '';
+	};
+	const normalizeInputFileForMessage = (file: any) => {
+		if (!file || typeof file !== 'object') {
+			return file;
+		}
+
+		if (file.type === 'image') {
+			return sanitizeImageFileRef(file) ?? structuredClone(file);
+		}
+
+		return structuredClone(file);
+	};
+	const uploadInlineImageForPersistence = async (file: any) => {
+		if (!file || typeof file !== 'object' || !isInlineDataImageUrl(file?.url)) {
+			return sanitizeImageFileRef(file) ?? structuredClone(file);
+		}
+
+		try {
+			const response = await fetch(file.url);
+			const imageBlob = await response.blob();
+			if (!imageBlob || imageBlob.size === 0) {
+				return structuredClone(file);
+			}
+
+			const mimeType = imageBlob.type || 'image/png';
+			const extension = mimeType.split('/').at(1)?.split('+').at(0) || 'png';
+			const fileName =
+				typeof file?.name === 'string' && file.name
+					? file.name
+					: `Chat_Image_${Date.now()}.${extension}`;
+			const uploadedFile = await uploadFile(
+				localStorage.token,
+				new File([imageBlob], fileName, { type: mimeType }),
+				{ process: false }
+			);
+
+			if (!uploadedFile?.id) {
+				return structuredClone(file);
+			}
+
+			const normalizedRef = sanitizeImageFileRef({
+				...file,
+				id: uploadedFile.id,
+				name: uploadedFile?.meta?.name ?? fileName,
+				size: uploadedFile?.meta?.size ?? imageBlob.size,
+				content_type: uploadedFile?.meta?.content_type ?? mimeType
+			});
+			return normalizedRef ? structuredClone(normalizedRef) : structuredClone(file);
+		} catch (error) {
+			console.error('Failed to normalize inline image before saving chat:', error);
+			return structuredClone(file);
+		}
+	};
+	const historyHasInlineDataImages = (historyState) =>
+		Object.values(historyState?.messages ?? {}).some((message: any) =>
+			Array.isArray(message?.files)
+				? message.files.some(
+						(file: any) => file?.type === 'image' && isInlineDataImageUrl(file?.url)
+					)
+				: false
+		);
+	const normalizeHistoryForPersistence = async (historyState) => {
+		if (!historyState?.messages || !historyHasInlineDataImages(historyState)) {
+			return { history: historyState, changed: false };
+		}
+
+		const normalizedHistory = structuredClone(historyState);
+		let changed = false;
+
+		for (const [messageId, message] of Object.entries(normalizedHistory.messages ?? {}) as [string, any][]) {
+			if (!Array.isArray(message?.files) || message.files.length === 0) {
+				continue;
+			}
+
+			const normalizedFiles = [];
+			let messageChanged = false;
+
+			for (const file of message.files) {
+				if (file?.type === 'image') {
+					const normalizedFile = await uploadInlineImageForPersistence(file);
+					normalizedFiles.push(normalizedFile);
+					if (JSON.stringify(normalizedFile) !== JSON.stringify(file)) {
+						messageChanged = true;
+					}
+				} else {
+					normalizedFiles.push(structuredClone(file));
+				}
+			}
+
+			if (messageChanged) {
+				normalizedHistory.messages[messageId] = {
+					...message,
+					files: normalizedFiles
+				};
+				changed = true;
+			}
+		}
+
+		return {
+			history: changed ? normalizedHistory : historyState,
+			changed
+		};
+	};
 	let controlPane;
 	let controlPaneComponent;
 
@@ -167,6 +343,10 @@
 	let overviewPinnedMessageId: string | null = null;
 	let overviewNavigationInFlight = false;
 	let _overviewNavigationTimer: ReturnType<typeof setTimeout> | null = null;
+	let messageOutlineHideTimer: ReturnType<typeof setTimeout> | null = null;
+	let messageOutlineLastUserIntentAt = 0;
+	let messageOutlineScrollbarDragPrimedUntil = 0;
+	const messageOutlineVisibleStore = writable(false);
 
 	let navbarElement;
 
@@ -462,7 +642,7 @@
 									...imageFiles.map((file) => ({
 										type: 'image_url',
 										image_url: {
-											url: file.url
+											url: buildModelImageRequestUrl(file)
 										}
 									}))
 								]
@@ -958,6 +1138,103 @@
 		persistSelectionThreads
 	});
 
+	const clearMessageOutlineHideTimer = () => {
+		if (messageOutlineHideTimer) {
+			clearTimeout(messageOutlineHideTimer);
+			messageOutlineHideTimer = null;
+		}
+	};
+
+	const revealMessageOutline = () => {
+		if ($mobile) {
+			return;
+		}
+
+		messageOutlineLastUserIntentAt = performance.now();
+		messageOutlineVisibleStore.set(true);
+		clearMessageOutlineHideTimer();
+		messageOutlineHideTimer = setTimeout(() => {
+			messageOutlineVisibleStore.set(false);
+			messageOutlineHideTimer = null;
+		}, MESSAGE_OUTLINE_IDLE_MS);
+	};
+
+	const primeMessageOutlineScrollbarDrag = () => {
+		messageOutlineScrollbarDragPrimedUntil =
+			performance.now() + MESSAGE_OUTLINE_SCROLLBAR_DRAG_PRIME_MS;
+	};
+
+	const clearMessageOutlineScrollbarDragPrime = () => {
+		messageOutlineScrollbarDragPrimedUntil = 0;
+	};
+
+	const shouldRevealMessageOutlineFromScroll = () => {
+		const now = performance.now();
+
+		return (
+			now - messageOutlineLastUserIntentAt <= MESSAGE_OUTLINE_SCROLL_INTENT_WINDOW_MS ||
+			messageOutlineScrollbarDragPrimedUntil >= now
+		);
+	};
+
+	const isEditableMessageOutlineTarget = (target: EventTarget | null) => {
+		if (!(target instanceof HTMLElement)) {
+			return false;
+		}
+
+		if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
+			return true;
+		}
+
+		return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+	};
+
+	const handleMessageOutlineWheel = () => {
+		revealMessageOutline();
+	};
+
+	const handleMessageOutlineTouchMove = () => {
+		revealMessageOutline();
+	};
+
+	const handleMessageOutlinePointerDown = (event: PointerEvent) => {
+		if (!messagesContainerElement || event.target !== messagesContainerElement) {
+			return;
+		}
+
+		primeMessageOutlineScrollbarDrag();
+	};
+
+	const handleMessageOutlineKeydown = (event: KeyboardEvent) => {
+		if (!messagesContainerElement || event.defaultPrevented) {
+			return;
+		}
+
+		if (!MESSAGE_OUTLINE_SCROLL_KEYS.has(event.key)) {
+			return;
+		}
+
+		if (isEditableMessageOutlineTarget(event.target)) {
+			return;
+		}
+
+		const activeElement = document.activeElement;
+		if (
+			activeElement &&
+			activeElement !== document.body &&
+			!messagesContainerElement.contains(activeElement)
+		) {
+			return;
+		}
+
+		revealMessageOutline();
+	};
+
+	setContext<MessageOutlineVisibilityContext>('messageOutlineVisibility', {
+		visibleStore: messageOutlineVisibleStore,
+		reveal: revealMessageOutline
+	});
+
 	const buildPersistedChatData = (
 		historyState,
 		messages = createMessagesList(historyState, historyState.currentId),
@@ -1351,6 +1628,9 @@
 	onMount(async () => {
 		window.addEventListener('message', onMessageHandler);
 		window.addEventListener('chat:set-input', onSetInputHandler as EventListener);
+		window.addEventListener('keydown', handleMessageOutlineKeydown, true);
+		window.addEventListener('pointerup', clearMessageOutlineScrollbarDragPrime, true);
+		window.addEventListener('pointercancel', clearMessageOutlineScrollbarDragPrime, true);
 		$socket?.on('chat-events', chatEventHandler);
 
 		if (!chatIdProp && !$chatId) {
@@ -1460,6 +1740,8 @@
 	onDestroy(() => {
 		chatIdUnsubscriber?.();
 		selectedAssistantSceneUnsubscriber?.();
+		clearMessageOutlineHideTimer();
+		messageOutlineVisibleStore.set(false);
 		if (selectionThreadsPersistTimeout) {
 			clearTimeout(selectionThreadsPersistTimeout);
 			selectionThreadsPersistTimeout = null;
@@ -1472,6 +1754,9 @@
 		overviewFocusedMessageId.set(null);
 		window.removeEventListener('message', onMessageHandler);
 		window.removeEventListener('chat:set-input', onSetInputHandler as EventListener);
+		window.removeEventListener('keydown', handleMessageOutlineKeydown, true);
+		window.removeEventListener('pointerup', clearMessageOutlineScrollbarDragPrime, true);
+		window.removeEventListener('pointercancel', clearMessageOutlineScrollbarDragPrime, true);
 		$socket?.off('chat-events', chatEventHandler);
 	});
 
@@ -2394,6 +2679,10 @@
 			return;
 		}
 
+		if (shouldRevealMessageOutlineFromScroll()) {
+			revealMessageOutline();
+		}
+
 		if (overviewPinnedMessageId) {
 			overviewPinnedMessageId = null;
 		}
@@ -2901,7 +3190,7 @@
 		}
 		if (
 			validFiles.length > 0 &&
-			validFiles.filter((file) => file.type !== 'image' && file.status === 'uploading').length > 0
+			validFiles.filter((file) => file.status === 'uploading').length > 0
 		) {
 			toast.error(
 				$i18n.t(`Oops! There are files still uploading. Please wait for the upload to complete.`)
@@ -2924,7 +3213,7 @@
 		const hasRunningResponse = messages.length !== 0 && messages.at(-1).done != true;
 		if (hasPendingTask || hasRunningResponse) {
 			if ($settings?.enableMessageQueue ?? true) {
-				const queuedFiles = structuredClone(validFiles);
+				const queuedFiles = validFiles.map((file) => normalizeInputFileForMessage(file));
 				if (failedFiles.length > 0) {
 					toast.warning(buildIgnoredFailedFilesMessage(failedFiles, $i18n.t.bind($i18n)));
 				}
@@ -2954,7 +3243,7 @@
 			toast.warning(buildIgnoredFailedFilesMessage(failedFiles, $i18n.t.bind($i18n)));
 		}
 
-		const _files = structuredClone(validFiles);
+		const _files = validFiles.map((file) => normalizeInputFileForMessage(file));
 		chatFiles.push(..._files.filter((item) => ['doc', 'file', 'collection'].includes(item.type)));
 		chatFiles = chatFiles.filter(
 			// Remove duplicates
@@ -3224,11 +3513,11 @@
 									...message.files
 										.filter((file) => file.type === 'image')
 										.map((file) => ({
-											type: 'image_url',
-											image_url: {
-												url: file.url
-											}
-										}))
+										type: 'image_url',
+										image_url: {
+											url: buildModelImageRequestUrl(file)
+										}
+									}))
 								]
 							}
 						: {
@@ -3887,16 +4176,26 @@
 
 	const saveChatHandler = async (
 		_chatId,
-		history,
+		historyState,
 		options: { selectionThreads?: PersistedSelectionThreads; messages?: any[] } = {}
 	) => {
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
 				const persistedSelectionThreads = options.selectionThreads ?? selectionThreads;
-				const persistedMessages = options.messages;
+				const { history: normalizedHistory, changed } =
+					await normalizeHistoryForPersistence(historyState);
+				const persistedMessages =
+					options.messages && !changed
+						? options.messages
+						: createMessagesList(normalizedHistory, normalizedHistory.currentId);
+
+				if (changed && history === historyState) {
+					history = normalizedHistory;
+				}
+
 				const payload = buildPersistedChatData(
-					history,
-					persistedMessages ?? createMessagesList(history, history.currentId),
+					normalizedHistory,
+					persistedMessages,
 					persistedSelectionThreads
 				);
 
@@ -3991,6 +4290,9 @@
 							class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
 							id="messages-container"
 							bind:this={messagesContainerElement}
+							on:wheel={handleMessageOutlineWheel}
+							on:touchmove={handleMessageOutlineTouchMove}
+							on:pointerdown={handleMessageOutlinePointerDown}
 							on:scroll={handleMessagesScroll}
 						>
 							<div class=" h-full w-full flex flex-col">

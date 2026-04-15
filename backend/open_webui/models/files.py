@@ -193,6 +193,16 @@ class FilesTable:
                 .all()
             ]
 
+    def get_file_by_hash_and_user_id(
+        self, user_id: str, hash: str
+    ) -> Optional[FileModel]:
+        with get_db() as db:
+            try:
+                file = db.query(File).filter_by(user_id=user_id, hash=hash).first()
+                return FileModel.model_validate(file) if file else None
+            except Exception:
+                return None
+
     def update_file_hash_by_id(self, id: str, hash: str) -> Optional[FileModel]:
         with get_db() as db:
             try:
@@ -222,6 +232,22 @@ class FilesTable:
                 merged = {**(file.meta if file.meta else {}), **meta}
                 # Sanitize: roundtrip through JSON to catch non-serializable values
                 file.meta = json.loads(json.dumps(merged, default=str))
+                db.commit()
+                return FileModel.model_validate(file)
+            except Exception:
+                return None
+
+    def update_file_access_control_by_id(
+        self, id: str, access_control: Optional[dict]
+    ) -> Optional[FileModel]:
+        with get_db() as db:
+            try:
+                file = db.query(File).filter_by(id=id).first()
+                file.access_control = (
+                    json.loads(json.dumps(access_control, default=str))
+                    if access_control is not None
+                    else None
+                )
                 db.commit()
                 return FileModel.model_validate(file)
             except Exception:

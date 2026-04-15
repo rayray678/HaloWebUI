@@ -4,7 +4,7 @@ import { parseBlobResponse, parseJsonResponse } from '../response';
 export const uploadFile = async (
 	token: string,
 	file: File,
-	options: { processingMode?: string } = {}
+	options: { processingMode?: string; process?: boolean } = {}
 ) => {
 	const data = new FormData();
 	data.append('file', file);
@@ -12,6 +12,9 @@ export const uploadFile = async (
 	const query = new URLSearchParams();
 	if (options.processingMode) {
 		query.set('processing_mode', options.processingMode);
+	}
+	if (typeof options.process === 'boolean') {
+		query.set('process', String(options.process));
 	}
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${query.toString() ? `?${query}` : ''}`, {

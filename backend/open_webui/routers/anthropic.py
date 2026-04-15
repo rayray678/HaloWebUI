@@ -61,6 +61,7 @@ from open_webui.utils.payload import (
     apply_model_system_prompt_to_body,
     merge_additive_payload_fields,
 )
+from open_webui.utils.chat_image_refs import resolve_chat_image_url_to_bytes
 from open_webui.utils.error_handling import build_error_detail
 
 log = logging.getLogger(__name__)
@@ -1611,7 +1612,12 @@ async def _fetch_url_as_base64(url: str) -> tuple[str, str]:
             return media_type, b64
 
 
-async def _openai_content_to_anthropic_blocks(content: Any) -> list[dict]:
+async def _openai_content_to_anthropic_blocks(
+    content: Any,
+    *,
+    user_id: Optional[str] = None,
+    is_admin: bool = False,
+) -> list[dict]:
     """
     Convert OpenAI message.content (string or array of content parts) into Anthropic content blocks.
 
@@ -1647,12 +1653,19 @@ async def _openai_content_to_anthropic_blocks(content: Any) -> list[dict]:
             if not url:
                 continue
 
-            m = DATA_URL_RE.match(url)
-            if m:
-                media_type = m.group("mime") or "image/png"
-                b64 = m.group("data") or ""
+            resolved = resolve_chat_image_url_to_bytes(
+                url, user_id=user_id, is_admin=is_admin
+            )
+            if resolved:
+                media_type, data = resolved
+                b64 = base64.b64encode(data).decode("utf-8")
             else:
-                media_type, b64 = await _fetch_url_as_base64(url)
+                m = DATA_URL_RE.match(url)
+                if m:
+                    media_type = m.group("mime") or "image/png"
+                    b64 = m.group("data") or ""
+                else:
+                    media_type, b64 = await _fetch_url_as_base64(url)
 
             # Anthropic accepts images as base64 sources.
             blocks.append(
@@ -2089,7 +2102,11 @@ async def generate_chat_completion(
 
         if role == "system":
             # Anthropic supports system as a separate top-level field. Keep it text-only.
-            sys_blocks = await _openai_content_to_anthropic_blocks(msg.get("content"))
+            sys_blocks = await _openai_content_to_anthropic_blocks(
+                msg.get("content"),
+                user_id=user.id,
+                is_admin=user.role == "admin",
+            )
             sys_text = "".join(
                 [b.get("text", "") for b in sys_blocks if b.get("type") == "text"]
             ).strip()
@@ -2115,7 +2132,11 @@ async def generate_chat_completion(
             continue
 
         if role == "assistant":
-            blocks = await _openai_content_to_anthropic_blocks(msg.get("content"))
+            blocks = await _openai_content_to_anthropic_blocks(
+                msg.get("content"),
+                user_id=user.id,
+                is_admin=user.role == "admin",
+            )
             tool_calls = msg.get("tool_calls") or []
             if isinstance(tool_calls, list):
                 for tc in tool_calls:
@@ -2142,7 +2163,11 @@ async def generate_chat_completion(
             continue
 
         # Default: user
-        blocks = await _openai_content_to_anthropic_blocks(msg.get("content"))
+        blocks = await _openai_content_to_anthropic_blocks(
+            msg.get("content"),
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
         anthropic_messages.append({"role": "user", "content": blocks})
 
     system = None

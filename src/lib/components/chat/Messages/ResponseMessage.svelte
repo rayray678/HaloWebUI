@@ -4,7 +4,7 @@
 
 	import { createEventDispatcher } from 'svelte';
 	import { onMount, tick, getContext } from 'svelte';
-	import type { Writable } from 'svelte/store';
+	import { writable, type Writable } from 'svelte/store';
 	import type { i18n as i18nType, t } from 'i18next';
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
@@ -80,6 +80,11 @@
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import type { HeadingItem } from '$lib/utils/headings';
+
+	type MessageOutlineVisibilityContext = {
+		visibleStore: Writable<boolean>;
+		reveal: () => void;
+	};
 
 	interface MessageType {
 		id: string;
@@ -291,6 +296,11 @@
 	let editTextAreaElement: HTMLTextAreaElement;
 	let contentRendererRef: any = null;
 	let messageHeadings: HeadingItem[] = [];
+	const fallbackMessageOutlineVisibleStore = writable(false);
+	const messageOutlineVisibilityContext =
+		getContext<MessageOutlineVisibilityContext | undefined>('messageOutlineVisibility');
+	const messageOutlineVisibleStore =
+		messageOutlineVisibilityContext?.visibleStore ?? fallbackMessageOutlineVisibleStore;
 	$: canShowMessageOutline =
 		!edit && !$mobile && ($settings?.showMessageOutline ?? true) && messageHeadings.length >= 1;
 
@@ -1046,7 +1056,9 @@
 								{#if canShowMessageOutline}
 									<MessageOutline
 										headings={messageHeadings}
+										visible={$messageOutlineVisibleStore}
 										onSelect={(heading) => {
+											messageOutlineVisibilityContext?.reveal?.();
 											contentRendererRef?.scrollToHeading?.(heading.id);
 										}}
 									/>

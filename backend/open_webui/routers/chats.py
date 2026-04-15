@@ -9,6 +9,7 @@ from open_webui.models.chats import (
     ChatImportForm,
     ChatResponse,
     Chats,
+    ChatMessages,
     ChatTitleIdResponse,
     normalize_chat_payload,
     # [REACTION_FEATURE] Commented out - reaction feature disabled for now
@@ -22,11 +23,13 @@ from open_webui.config import ENABLE_ADMIN_CHAT_ACCESS, ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS, FOLDER_MAX_ITEM_COUNT
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_permission
+from open_webui.utils.chat_image_refs import normalize_chat_payload_image_refs
 from open_webui.tasks import list_task_ids_by_chat_id
 
 log = logging.getLogger(__name__)
@@ -90,6 +93,34 @@ def _sync_imported_chat_tags(chat, user_id: str) -> None:
             and Tags.get_tag_by_name_and_user_id(tag_name, user_id) is None
         ):
             Tags.insert_new_tag(tag_name, user_id)
+
+
+async def _normalize_chat_payload_images(chat_payload: dict, user) -> tuple[dict, set[str]]:
+    return await run_in_threadpool(
+        lambda: normalize_chat_payload_image_refs(
+            chat_payload,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
+    )
+
+
+def _sync_changed_chat_messages(
+    chat_id: str, user_id: str, chat_payload: dict, changed_message_ids: set[str]
+) -> None:
+    if not changed_message_ids:
+        return
+
+    messages = chat_payload.get("history", {}).get("messages", {}) or {}
+    for message_id in changed_message_ids:
+        message = messages.get(message_id)
+        if isinstance(message, dict):
+            ChatMessages.upsert_message(
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                message=message,
+            )
 
 ############################
 # GetChatList
@@ -160,7 +191,23 @@ async def get_user_chat_list_by_user_id(
 @router.post("/new", response_model=Optional[ChatResponse])
 async def create_new_chat(form_data: ChatForm, user=Depends(get_verified_user)):
     try:
-        chat = Chats.insert_new_chat(user.id, form_data)
+        normalized_chat, changed_message_ids = await _normalize_chat_payload_images(
+            form_data.chat, user
+        )
+        chat = Chats.insert_new_chat(
+            user.id,
+            ChatForm(
+                chat=normalized_chat,
+                folder_id=form_data.folder_id,
+                assistant_id=form_data.assistant_id,
+            ),
+        )
+        if chat and changed_message_ids:
+            await run_in_threadpool(
+                lambda: _sync_changed_chat_messages(
+                    chat.id, user.id, normalized_chat, changed_message_ids
+                )
+            )
         return _chat_response(chat)
     except Exception as e:
         log.exception(e)
@@ -177,7 +224,25 @@ async def create_new_chat(form_data: ChatForm, user=Depends(get_verified_user)):
 @router.post("/import", response_model=Optional[ChatResponse])
 async def import_chat(form_data: ChatImportForm, user=Depends(get_verified_user)):
     try:
-        chat = Chats.import_chat(user.id, form_data)
+        normalized_chat, changed_message_ids = await _normalize_chat_payload_images(
+            form_data.chat, user
+        )
+        chat = Chats.import_chat(
+            user.id,
+            ChatImportForm(
+                chat=normalized_chat,
+                meta=form_data.meta,
+                pinned=form_data.pinned,
+                folder_id=form_data.folder_id,
+                assistant_id=form_data.assistant_id,
+            ),
+        )
+        if chat and changed_message_ids:
+            await run_in_threadpool(
+                lambda: _sync_changed_chat_messages(
+                    chat.id, user.id, normalized_chat, changed_message_ids
+                )
+            )
         _sync_imported_chat_tags(chat, user.id)
         return _chat_response(chat)
     except Exception as e:
@@ -195,9 +260,31 @@ async def import_chats_batch(
 
     if form_data.mode == "replace":
         try:
-            import_forms = [ChatImportForm(**item.model_dump()) for item in form_data.items]
+            import_forms = []
+            normalized_entries: list[tuple[dict, set[str]]] = []
+            for item in form_data.items:
+                normalized_chat, changed_message_ids = await _normalize_chat_payload_images(
+                    item.chat, user
+                )
+                import_forms.append(
+                    ChatImportForm(
+                        chat=normalized_chat,
+                        meta=item.meta,
+                        pinned=item.pinned,
+                        folder_id=item.folder_id,
+                        assistant_id=item.assistant_id,
+                    )
+                )
+                normalized_entries.append((normalized_chat, changed_message_ids))
             chats = Chats.replace_chats_by_user_id(user.id, import_forms)
-            for chat in chats:
+            for idx, chat in enumerate(chats):
+                normalized_chat, changed_message_ids = normalized_entries[idx]
+                if changed_message_ids:
+                    await run_in_threadpool(
+                        lambda chat_id=chat.id, payload=normalized_chat, changed_ids=changed_message_ids: _sync_changed_chat_messages(
+                            chat_id, user.id, payload, changed_ids
+                        )
+                    )
                 _sync_imported_chat_tags(chat, user.id)
 
             return ChatBatchImportResponse(
@@ -219,7 +306,19 @@ async def import_chats_batch(
 
     for index, item in enumerate(form_data.items):
         try:
-            chat = Chats.import_chat(user.id, ChatImportForm(**item.model_dump()))
+            normalized_chat, changed_message_ids = await _normalize_chat_payload_images(
+                item.chat, user
+            )
+            chat = Chats.import_chat(
+                user.id,
+                ChatImportForm(
+                    chat=normalized_chat,
+                    meta=item.meta,
+                    pinned=item.pinned,
+                    folder_id=item.folder_id,
+                    assistant_id=item.assistant_id,
+                ),
+            )
             if chat is None:
                 failures.append(
                     ChatImportFailure(
@@ -230,6 +329,12 @@ async def import_chats_batch(
                 )
                 continue
 
+            if changed_message_ids:
+                await run_in_threadpool(
+                    lambda: _sync_changed_chat_messages(
+                        chat.id, user.id, normalized_chat, changed_message_ids
+                    )
+                )
             _sync_imported_chat_tags(chat, user.id)
             imported += 1
         except Exception as e:
@@ -564,7 +669,16 @@ async def update_chat_by_id(
     chat = Chats.get_chat_by_id_and_user_id(id, user.id)
     if chat:
         updated_chat = {**chat.chat, **form_data.chat}
-        chat = Chats.update_chat_by_id(id, updated_chat)
+        normalized_chat, changed_message_ids = await _normalize_chat_payload_images(
+            updated_chat, user
+        )
+        chat = Chats.update_chat_by_id(id, normalized_chat)
+        if chat and changed_message_ids:
+            await run_in_threadpool(
+                lambda: _sync_changed_chat_messages(
+                    id, user.id, normalized_chat, changed_message_ids
+                )
+            )
         return _chat_response(chat)
     else:
         raise HTTPException(

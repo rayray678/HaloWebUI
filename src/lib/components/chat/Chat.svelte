@@ -1822,14 +1822,20 @@
 	let isLoadingSkills = false;
 	const setSkillIds = async () => {
 		if (!$skillsStore || $skillsStore.length === 0) {
-			// Prevent infinite loop: only fetch if not already loading
 			if (isLoadingSkills) {
 				return;
 			}
 			isLoadingSkills = true;
 			try {
 				const latestSkills = (await getSkills(localStorage.token).catch(() => [])) ?? [];
-				skillsStore.set(latestSkills);
+				// 关键：仅在内容真正变化时 set，避免写入新数组引用触发响应式循环
+				const current = $skillsStore ?? [];
+				const changed =
+					latestSkills.length !== current.length ||
+					latestSkills.some((s, i) => s?.id !== current[i]?.id);
+				if (changed) {
+					skillsStore.set(latestSkills);
+				}
 				if (latestSkills.length === 0 && selectedSkillIds.length > 0) {
 					selectedSkillIds = [];
 				}

@@ -2207,20 +2207,17 @@
 												bind:state={scrollOnBranchChange}
 											/>
 										</div>
-										<div class="flex items-center justify-between glass-item px-4 py-3">
+										<div class="glass-item px-4 py-3">
 											<div class="text-sm font-medium">
-												{tr('按当前页面样式导出 PDF', 'Export PDF using current page style')}
+												{tr('PDF 导出说明', 'PDF export note')}
 											</div>
-											<Switch
-												bind:state={stylizedPdfExport}
-											/>
+											<div class="text-xs text-gray-500 dark:text-gray-400 mt-1.5 leading-5">
+												{tr(
+													'PDF 现已改为文档型导出，优先保证文字、列表、代码块和图片的稳定排版，不再跟随当前聊天页面视觉样式。',
+													'PDF export now uses a document layout to keep text, lists, code blocks, and images stable instead of mirroring the current chat page style.'
+												)}
+											</div>
 										</div>
-									</div>
-									<div class="text-xs text-gray-500 dark:text-gray-400 mt-1.5 pl-1">
-										{tr(
-											'开启：导出效果更接近当前聊天页面。关闭：使用简化兼容导出，速度更稳。',
-											'On: export stays closer to the current chat page. Off: use simplified export for better stability.'
-										)}
 									</div>
 
 									<!-- Sub-group C: Interaction -->

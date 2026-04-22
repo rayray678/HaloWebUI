@@ -17,7 +17,7 @@ if [[ "${WEB_LOADER_ENGINE,,}" == "playwright" ]]; then
         playwright install chromium
         playwright install-deps chromium
     elif ! command -v playwright >/dev/null 2>&1; then
-        echo "Playwright optional dependency missing. Install backend/requirements/web-playwright.txt or use INSTALL_PROFILE=full."
+        echo "Playwright dependency missing. Rebuild with INSTALL_PROFILE=core or INSTALL_PROFILE=full."
     fi
 
     "$PYTHON_BIN" - <<'PY'

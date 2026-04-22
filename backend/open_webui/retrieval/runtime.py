@@ -77,7 +77,7 @@ def get_runtime_capabilities() -> dict[str, Any]:
                 else format_optional_dependency_error(
                     feature="Playwright web loader",
                     packages=["playwright"],
-                    install_profiles=["web-playwright", "full"],
+                    install_profiles=["core", "full"],
                 )
             ),
             "firecrawl": (

@@ -2,14 +2,13 @@
 	import { toast } from 'svelte-sonner';
 	import { DropdownMenu } from 'bits-ui';
 	import { flyAndScale } from '$lib/utils/transitions';
-	import { getContext, createEventDispatcher, tick } from 'svelte';
+	import { getContext, createEventDispatcher } from 'svelte';
 
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
 	const dispatch = createEventDispatcher();
 
-	import ChatPdfPreview from '$lib/components/chat/ChatPdfPreview.svelte';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { Pin, PinOff, PencilLine, Copy, Archive, Share2, Download, Trash2 } from 'lucide-svelte';
@@ -18,9 +17,10 @@
 		getChatPinnedStatusById,
 		toggleChatPinnedStatusById
 	} from '$lib/apis/chats';
-	import { settings } from '$lib/stores';
 	import { createMessagesList } from '$lib/utils';
-	import type { ChatPdfExportMode } from '$lib/utils/chat-pdf-export';
+	import { downloadChatAsPDF } from '$lib/apis/utils';
+	import { buildPdfExportMessages, buildPdfFileName } from '$lib/utils/chat-pdf-document';
+	import { getErrorDetail } from '$lib/apis/response';
 
 	const i18n = getContext('i18n');
 
@@ -35,11 +35,6 @@
 
 	let show = false;
 	let pinned = false;
-	let showPdfPreview = false;
-	let pdfPreviewMode: ChatPdfExportMode = 'stylized';
-	let pdfPreviewContainer: HTMLDivElement | null = null;
-	let pdfPreviewChat = null;
-	let pdfPreviewDarkMode = false;
 
 	const pinHandler = async () => {
 		await toggleChatPinnedStatusById(localStorage.token, chatId);
@@ -74,14 +69,6 @@
 		saveAs(blob, `chat-${chat.chat.title}.txt`);
 	};
 
-	const loadPdfExporter = async () => {
-		if (import.meta.env.DEV) {
-			return await import(/* @vite-ignore */ `/src/lib/utils/chat-pdf-export.ts?t=${Date.now()}`);
-		}
-
-		return await import('$lib/utils/chat-pdf-export');
-	};
-
 	const downloadPdf = async () => {
 		const targetChat = await getChatById(localStorage.token, chatId);
 		if (!targetChat?.chat?.history) {
@@ -89,36 +76,22 @@
 			return;
 		}
 
-		pdfPreviewMode = $settings?.stylizedPdfExport ?? true ? 'stylized' : 'compact';
-		pdfPreviewDarkMode =
-			pdfPreviewMode === 'stylized' && document.documentElement.classList.contains('dark');
-		pdfPreviewChat = targetChat;
-		showPdfPreview = true;
-
-		await tick();
-
-		if (!pdfPreviewContainer) {
-			showPdfPreview = false;
-			pdfPreviewChat = null;
-			toast.error($i18n.t('Failed to export PDF'));
-			return;
-		}
-
 		try {
-			const { exportChatPdfFromElement } = await loadPdfExporter();
-			await exportChatPdfFromElement({
-				sourceElement: pdfPreviewContainer,
-				title: targetChat?.chat?.title,
-				mode: pdfPreviewMode,
-				darkMode: pdfPreviewDarkMode
-			});
+			const messages = buildPdfExportMessages(targetChat);
+			const blob = await downloadChatAsPDF(
+				localStorage.token,
+				targetChat?.chat?.title ?? 'chat',
+				messages
+			);
+
+			if (!blob) {
+				throw new Error('Failed to export PDF');
+			}
+
+			saveAs(blob, buildPdfFileName(targetChat?.chat?.title));
 		} catch (error) {
 			console.error('Error generating PDF', error);
-			toast.error($i18n.t('Failed to export PDF'));
-		} finally {
-			showPdfPreview = false;
-			pdfPreviewChat = null;
-			pdfPreviewContainer = null;
+			toast.error(getErrorDetail(error, $i18n.t('Failed to export PDF')));
 		}
 	};
 
@@ -137,14 +110,6 @@
 		checkPinned();
 	}
 </script>
-
-<ChatPdfPreview
-	bind:container={pdfPreviewContainer}
-	chat={pdfPreviewChat}
-	visible={showPdfPreview}
-	mode={pdfPreviewMode}
-	darkMode={pdfPreviewDarkMode}
-/>
 
 <Dropdown
 	bind:show

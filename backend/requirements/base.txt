@@ -44,9 +44,11 @@ fake-useragent==2.1.0
 chromadb==0.6.3
 # ChromaDB 0.6.x still calls the pre-6.x PostHog capture API.
 posthog<6
+playwright==1.49.1
 
 beautifulsoup4
 chardet==5.2.0
+brotli==1.1.0
 ftfy==6.2.3
 pypdf==4.3.1
 fpdf2==2.8.2

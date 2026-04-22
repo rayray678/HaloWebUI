@@ -38,8 +38,6 @@ type AtomicRange = {
 
 const PDF_PAGE_WIDTH_MM = 210;
 const PDF_PAGE_HEIGHT_MM = 297;
-const PDF_PAGE_TOP_MARGIN_MM = 6;
-const PDF_PAGE_BOTTOM_MARGIN_MM = 2;
 const PAGE_EDGE_PADDING_PX = 18;
 const MESSAGE_HEAD_KEEP_WITH_BODY_PX = 150;
 const MESSAGE_FIRST_BLOCK_KEEP_PX = 280;
@@ -48,6 +46,7 @@ const MESSAGE_CROSSING_THRESHOLD_CSS_PX = 180;
 const MIN_NEAR_PAGE_IMAGE_SHRINK_RATIO = 0.78;
 const MAX_PAGE_SLICE_PLAN_PASSES = 12;
 const MAX_BREAK_NORMALIZATION_PASSES = 6;
+const MAX_BREAK_REBALANCE_PASSES = 8;
 const IMAGE_BREAK_SAFETY_PX = 24;
 const CANVAS_IMAGE_POSITION_SEARCH_PX = 180;
 const CANVAS_IMAGE_ROW_THRESHOLD_RATIO = 0.18;
@@ -58,6 +57,7 @@ const CANVAS_IMAGE_EDGE_GAP_PX = 3;
 const MIN_PAGE_FILL_RATIO = 0.62;
 const PREFERRED_MESSAGE_FILL_RATIO = 0.52;
 const MIN_SLICE_HEIGHT_RATIO = 0.35;
+const SHORT_MIDDLE_PAGE_MAX_HEIGHT_RATIO = 0.45;
 const ATOMIC_BLOCK_MAX_HEIGHT_RATIO = 0.92;
 const KEEP_TOGETHER_MAX_HEIGHT_RATIO = 0.22;
 const CONTENT_IMAGE_SELECTOR = [
@@ -417,6 +417,35 @@ const normalizeContentImages = (root: HTMLElement) => {
 			wrapper.style.textAlign = 'center';
 		}
 	}
+};
+
+const normalizeExportTypography = (root: HTMLElement) => {
+	const style = document.createElement('style');
+	style.textContent = `
+		.markdown-prose :where(ol, ul) {
+			list-style-position: outside !important;
+			padding-inline-start: 1.6em !important;
+			margin-top: 0.4em !important;
+			margin-bottom: 0.4em !important;
+		}
+
+		.markdown-prose :where(li) {
+			padding-inline-start: 0.15em !important;
+			margin-top: 0.16em !important;
+			margin-bottom: 0.16em !important;
+		}
+
+		.markdown-prose :where(li > p) {
+			margin-top: 0 !important;
+			margin-bottom: 0 !important;
+		}
+
+		.markdown-prose :where(li)::marker {
+			font-variant-numeric: tabular-nums;
+		}
+	`;
+
+	root.prepend(style);
 };
 
 const constrainImageHeight = (image: HTMLImageElement, maxHeight: number) => {
@@ -871,6 +900,30 @@ const normalizeBreakOffsets = (
 	return normalizedBreakOffsets;
 };
 
+const resolveProtectedBreakOffset = (
+	previousBreak: number,
+	breakOffset: number,
+	imageRanges: AtomicRange[],
+	protectedAtomicRanges: BlockRange[],
+	messageHeadRanges: BlockRange[],
+	keepTogetherRanges: BlockRange[]
+) => {
+	let nextBreak = breakOffset;
+	const blockingImageRange = findBlockingImageRange(nextBreak, imageRanges);
+
+	if (blockingImageRange && blockingImageRange.top > previousBreak + 1) {
+		nextBreak = Math.max(previousBreak + 1, blockingImageRange.top - IMAGE_BREAK_SAFETY_PX);
+	}
+
+	return adjustBreakAgainstProtectedBlocks(
+		previousBreak,
+		nextBreak,
+		messageHeadRanges,
+		protectedAtomicRanges,
+		keepTogetherRanges
+	);
+};
+
 const getBandInkScore = (
 	imageData: Uint8ClampedArray,
 	canvasWidth: number,
@@ -983,6 +1036,118 @@ const snapBreakOffsetsToWhitespace = (
 	}
 
 	return snappedBreakOffsets;
+};
+
+const rebalanceBreakOffsets = (
+	breakOffsets: number[],
+	pagePixelHeight: number,
+	totalHeight: number,
+	imageRanges: AtomicRange[],
+	protectedAtomicRanges: BlockRange[],
+	messageHeadRanges: BlockRange[],
+	keepTogetherRanges: BlockRange[],
+	canvas: HTMLCanvasElement,
+	background: RgbaColor
+) => {
+	const normalizedBreakOffsets =
+		breakOffsets.length > 0 ? [...breakOffsets] : [Math.max(totalHeight, 1)];
+	normalizedBreakOffsets[normalizedBreakOffsets.length - 1] = totalHeight;
+
+	const minSliceHeight = Math.floor(pagePixelHeight * MIN_SLICE_HEIGHT_RATIO);
+	const shortMiddlePageMaxHeight = Math.floor(pagePixelHeight * SHORT_MIDDLE_PAGE_MAX_HEIGHT_RATIO);
+	const minPageFill = Math.floor(pagePixelHeight * MIN_PAGE_FILL_RATIO);
+
+	for (let pass = 0; pass < MAX_BREAK_REBALANCE_PASSES; pass += 1) {
+		let changed = false;
+
+		for (let index = 1; index < normalizedBreakOffsets.length - 1; index += 1) {
+			const currentPageStart = normalizedBreakOffsets[index - 1];
+			const currentPageEnd = normalizedBreakOffsets[index];
+			const currentPageHeight = currentPageEnd - currentPageStart;
+
+			if (currentPageHeight > shortMiddlePageMaxHeight) {
+				continue;
+			}
+
+			const previousPageStart = index >= 2 ? normalizedBreakOffsets[index - 2] : 0;
+			const nextPageEnd = normalizedBreakOffsets[index + 1];
+			const mergedIntoPreviousHeight = currentPageEnd - previousPageStart;
+
+			if (mergedIntoPreviousHeight <= pagePixelHeight) {
+				normalizedBreakOffsets.splice(index - 1, 1);
+				changed = true;
+				break;
+			}
+
+			const mergedIntoNextHeight = nextPageEnd - currentPageStart;
+			if (mergedIntoNextHeight <= pagePixelHeight) {
+				normalizedBreakOffsets.splice(index, 1);
+				changed = true;
+				break;
+			}
+		}
+
+		if (changed) {
+			normalizedBreakOffsets[normalizedBreakOffsets.length - 1] = totalHeight;
+			continue;
+		}
+
+		let previousBreak = 0;
+		for (let index = 0; index < normalizedBreakOffsets.length; index += 1) {
+			const currentBreak = normalizedBreakOffsets[index];
+			const sliceHeight = currentBreak - previousBreak;
+
+			if (sliceHeight <= pagePixelHeight) {
+				previousBreak = currentBreak;
+				continue;
+			}
+
+			const rawTargetBreak = previousBreak + pagePixelHeight;
+			const whitespaceBreak = findWhitespaceBreak(
+				canvas,
+				previousBreak,
+				rawTargetBreak,
+				minPageFill,
+				background
+			);
+			let nextBreak =
+				whitespaceBreak && whitespaceBreak > previousBreak + minSliceHeight
+					? whitespaceBreak
+					: rawTargetBreak;
+
+			nextBreak = Math.max(
+				previousBreak + minSliceHeight,
+				Math.min(currentBreak - minSliceHeight, nextBreak)
+			);
+			nextBreak = resolveProtectedBreakOffset(
+				previousBreak,
+				nextBreak,
+				imageRanges,
+				protectedAtomicRanges,
+				messageHeadRanges,
+				keepTogetherRanges
+			);
+
+			if (nextBreak <= previousBreak + minSliceHeight || nextBreak >= currentBreak - 1) {
+				nextBreak = Math.max(
+					previousBreak + minSliceHeight,
+					Math.min(currentBreak - 1, rawTargetBreak)
+				);
+			}
+
+			normalizedBreakOffsets.splice(index, 0, nextBreak);
+			changed = true;
+			break;
+		}
+
+		normalizedBreakOffsets[normalizedBreakOffsets.length - 1] = totalHeight;
+
+		if (!changed) {
+			break;
+		}
+	}
+
+	return normalizedBreakOffsets;
 };
 
 const findActualCanvasImageRange = (
@@ -1258,18 +1423,21 @@ const mapPageSlicesToCanvas = (
 		atomicRanges.filter((range) => Boolean(range.image)),
 		background
 	);
+	const protectedAtomicRanges = atomicRanges.filter(
+		(range) => !range.image && range.height < pagePixelHeight * ATOMIC_BLOCK_MAX_HEIGHT_RATIO
+	);
+	const messageHeadRanges = collectMessageHeadRanges(root, canvas.width);
+	const keepTogetherRanges = collectKeepTogetherRanges(
+		root,
+		canvas.width,
+		Math.floor(pagePixelHeight * KEEP_TOGETHER_MAX_HEIGHT_RATIO)
+	);
 	const safeBreakOffsets = normalizeBreakOffsets(
 		canvasBreakOffsets,
 		imageRanges,
-		atomicRanges.filter(
-			(range) => !range.image && range.height < pagePixelHeight * ATOMIC_BLOCK_MAX_HEIGHT_RATIO
-		),
-		collectMessageHeadRanges(root, canvas.width),
-		collectKeepTogetherRanges(
-			root,
-			canvas.width,
-			Math.floor(pagePixelHeight * KEEP_TOGETHER_MAX_HEIGHT_RATIO)
-		),
+		protectedAtomicRanges,
+		messageHeadRanges,
+		keepTogetherRanges,
 		canvas.height,
 		pagePixelHeight
 	);
@@ -1282,20 +1450,34 @@ const mapPageSlicesToCanvas = (
 	const finalBreakOffsets = normalizeBreakOffsets(
 		whitespaceSafeBreakOffsets,
 		imageRanges,
-		atomicRanges.filter(
-			(range) => !range.image && range.height < pagePixelHeight * ATOMIC_BLOCK_MAX_HEIGHT_RATIO
-		),
-		collectMessageHeadRanges(root, canvas.width),
-		collectKeepTogetherRanges(
-			root,
-			canvas.width,
-			Math.floor(pagePixelHeight * KEEP_TOGETHER_MAX_HEIGHT_RATIO)
-		),
+		protectedAtomicRanges,
+		messageHeadRanges,
+		keepTogetherRanges,
+		canvas.height,
+		pagePixelHeight
+	);
+	const rebalancedBreakOffsets = rebalanceBreakOffsets(
+		finalBreakOffsets,
+		pagePixelHeight,
+		canvas.height,
+		imageRanges,
+		protectedAtomicRanges,
+		messageHeadRanges,
+		keepTogetherRanges,
+		canvas,
+		background
+	);
+	const stabilizedBreakOffsets = normalizeBreakOffsets(
+		rebalancedBreakOffsets,
+		imageRanges,
+		protectedAtomicRanges,
+		messageHeadRanges,
+		keepTogetherRanges,
 		canvas.height,
 		pagePixelHeight
 	);
 
-	return buildPageSlicesFromBreakOffsets(finalBreakOffsets, canvas.height);
+	return buildPageSlicesFromBreakOffsets(stabilizedBreakOffsets, canvas.height);
 };
 
 const buildPageSlices = (
@@ -1331,18 +1513,10 @@ const saveCanvasAsPdf = async (
 		ctx.drawImage(canvas, 0, offsetY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
 
 		const imageData = pageCanvas.toDataURL('image/jpeg', quality);
-		const availableWidthMM = PDF_PAGE_WIDTH_MM;
-		const availableHeightMM = Math.max(
-			1,
-			PDF_PAGE_HEIGHT_MM - PDF_PAGE_TOP_MARGIN_MM - PDF_PAGE_BOTTOM_MARGIN_MM
+		const imageHeightMM = Math.min(
+			PDF_PAGE_HEIGHT_MM,
+			(pageCanvas.height * PDF_PAGE_WIDTH_MM) / Math.max(pageCanvas.width, 1)
 		);
-		const widthScale = availableWidthMM / Math.max(pageCanvas.width, 1);
-		const heightScale = availableHeightMM / Math.max(pageCanvas.height, 1);
-		const scale = Math.min(widthScale, heightScale);
-		const imageWidthMM = pageCanvas.width * scale;
-		const imageHeightMM = pageCanvas.height * scale;
-		const imageXMM = (PDF_PAGE_WIDTH_MM - imageWidthMM) / 2;
-		const imageYMM = PDF_PAGE_TOP_MARGIN_MM;
 
 		if (page > 0) {
 			pdf.addPage();
@@ -1356,7 +1530,7 @@ const saveCanvasAsPdf = async (
 			pdf.rect(0, 0, PDF_PAGE_WIDTH_MM, PDF_PAGE_HEIGHT_MM, 'F');
 		}
 
-		pdf.addImage(imageData, 'JPEG', imageXMM, imageYMM, imageWidthMM, imageHeightMM);
+		pdf.addImage(imageData, 'JPEG', 0, 0, PDF_PAGE_WIDTH_MM, imageHeightMM);
 		pageCanvas.width = 0;
 		pageCanvas.height = 0;
 		page += 1;
@@ -1382,6 +1556,7 @@ export const exportChatPdfFromElement = async ({
 		await waitForImages(clone);
 		stabilizeModelIconsForExport(clone);
 		normalizeContentImages(clone);
+		normalizeExportTypography(clone);
 
 		if (mode === 'compact') {
 			applyCompactAppearance(clone);

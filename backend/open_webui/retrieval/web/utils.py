@@ -150,7 +150,7 @@ def _get_playwright_loader_class():
         "langchain_community.document_loaders",
         feature="Playwright web loader",
         packages=["playwright"],
-        install_profiles=["web-playwright", "full"],
+        install_profiles=["core", "full"],
     )
     return module.PlaywrightURLLoader
 

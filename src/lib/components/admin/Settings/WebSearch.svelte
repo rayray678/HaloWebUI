@@ -3,7 +3,9 @@
 	import {
 		getRAGConfig,
 		updateRAGConfig,
+		verifyPlaywrightWebConfig,
 		verifyTavilyWebConfig,
+		type PlaywrightConfigVerifyResponse,
 		type TavilyConfigVerifyItem,
 		type TavilyConfigVerifyResponse
 	} from '$lib/apis/retrieval';
@@ -44,9 +46,31 @@
 
 	let selectedTab: 'webSearch' | 'loader' = 'webSearch';
 
-	const tabMeta: Record<string, { label: string; description: string; badgeColor: string; iconColor: string }> = {
-		webSearch: { label: 'Web Search', description: 'Configure web search engines and routing strategies', badgeColor: 'bg-cyan-50 dark:bg-cyan-950/30', iconColor: 'text-cyan-500 dark:text-cyan-400' },
-		loader: { label: 'Web Loader', description: 'Configure web page loaders and content extraction', badgeColor: 'bg-teal-50 dark:bg-teal-950/30', iconColor: 'text-teal-500 dark:text-teal-400' }
+	const tabMeta: Record<
+		string,
+		{
+			label: string;
+			descriptionKey: string;
+			descriptionDefault: string;
+			badgeColor: string;
+			iconColor: string;
+		}
+	> = {
+		webSearch: {
+			label: 'Web Search',
+			descriptionKey: '配置联网搜索引擎与调用策略',
+			descriptionDefault: 'Configure web search engines and routing strategies',
+			badgeColor: 'bg-cyan-50 dark:bg-cyan-950/30',
+			iconColor: 'text-cyan-500 dark:text-cyan-400'
+		},
+		loader: {
+			label: 'Web Loader',
+			descriptionKey: '用于指定系统在获取网页链接后如何加载页面并提取正文内容',
+			descriptionDefault:
+				'Define how the system loads linked pages and extracts main content after obtaining a web link.',
+			badgeColor: 'bg-teal-50 dark:bg-teal-950/30',
+			iconColor: 'text-teal-500 dark:text-teal-400'
+		}
 	};
 
 	$: activeTabMeta = tabMeta[selectedTab];
@@ -94,8 +118,14 @@
 		grok: 'Grok',
 		sougou: 'Sougou'
 	};
+	const WEB_LOADER_ENGINE_LABELS: Record<string, string> = {
+		playwright: 'Playwright',
+		firecrawl: 'Firecrawl',
+		tavily: 'Tavily'
+	};
 
 	const getWebSearchEngineLabel = (engine: string) => WEB_SEARCH_ENGINE_LABELS[engine] ?? engine;
+	const getWebLoaderEngineLabel = (engine: string) => WEB_LOADER_ENGINE_LABELS[engine] ?? engine;
 
 	$: webSearchEngineOptions = webSearchEngines.map((engine) => ({
 		value: engine,
@@ -131,6 +161,13 @@
 	let initialSnapshot = null;
 
 	let webConfig: any = null;
+	let playwrightMode: 'local' | 'remote' = 'local';
+	let playwrightVerifyLoading = false;
+	let playwrightVerifyResult: PlaywrightConfigVerifyResponse | null = null;
+	let lastPlaywrightVerifyFingerprint = '';
+	let loaderEngineOptions = [];
+	let selectedLoaderCapabilityMessage = '';
+	let selectedLoaderUnavailable = false;
 	let youtubeLanguage = '';
 	let youtubeTranslation = '';
 	let tavilySearchBaseUrlInput = '';
@@ -180,7 +217,6 @@
 		TAVILY_EXTRACT_API_FORCE_MODE: boolean;
 		TAVILY_EXTRACT_DEPTH: string;
 	};
-
 	const NUMERIC_FIELD_LABEL_KEYS: Record<NumericFieldName, string> = {
 		WEB_SEARCH_RESULT_COUNT: '搜索结果数量',
 		WEB_SEARCH_CONCURRENT_REQUESTS: '并发请求数',
@@ -192,6 +228,56 @@
 		'Tavily URL accepts a base URL or the matching endpoint. Add # at the end to use the exact URL without auto-appending /search or /extract.';
 	const TAVILY_FORCE_MODE_DESCRIPTION =
 		'Force mode uses the exact URL and will not auto-append /search or /extract.';
+	let playwrightModeOptions: Array<{
+		value: 'local' | 'remote';
+		label: string;
+		description: string;
+	}> = [];
+
+	const normalizePlaywrightMode = (value: unknown): 'local' | 'remote' =>
+		value === 'remote' ? 'remote' : 'local';
+
+	const syncPlaywrightModeFromConfig = () => {
+		playwrightMode = normalizePlaywrightMode(
+			String(webConfig?.PLAYWRIGHT_WS_URL || '').trim() ? 'remote' : 'local'
+		);
+	};
+
+	const getLoaderAvailabilityMessage = (engine: string) => {
+		if (engine === 'firecrawl') {
+			return tr(
+				'当前部署环境未启用 Firecrawl 网页加载能力。请检查服务端依赖，或切换为其他网页加载方式。',
+				'Firecrawl web loading is not enabled in the current deployment. Check the server dependencies or switch to another web loading method.'
+			);
+		}
+
+		return '';
+	};
+
+	const isLoaderUnavailable = (engine: string) =>
+		engine === 'firecrawl' && !runtimeCapabilities.firecrawl_available;
+
+	$: {
+		$i18n;
+		playwrightModeOptions = [
+			{
+				value: 'local',
+				label: tr('本地浏览器', 'Local Browser'),
+				description: tr(
+					'由当前服务端直接启动浏览器，适用于已安装 Playwright 依赖与 Chromium 的部署环境。',
+					'The current server launches the browser directly. Use this when Playwright dependencies and Chromium are installed on the server.'
+				)
+			},
+			{
+				value: 'remote',
+				label: tr('外部浏览器服务（WebSocket）', 'External Browser Service (WebSocket)'),
+				description: tr(
+					'连接独立浏览器服务，适用于 Docker 分离部署或将浏览器运行在独立容器中的场景。',
+					'Connect to a dedicated browser service. Use this for split Docker deployments or when the browser runs in a separate container.'
+				)
+			}
+		];
+	}
 
 	const getTavilyEndpointLabel = (endpoint: TavilyEndpoint) =>
 		endpoint === 'search' ? 'search' : 'extract';
@@ -367,6 +453,7 @@
 			webConfig[field] = payloadWeb[field];
 		}
 
+		webConfig.PLAYWRIGHT_WS_URL = payloadWeb.PLAYWRIGHT_WS_URL || '';
 		webConfig.TAVILY_API_KEY = payloadWeb.TAVILY_API_KEY || '';
 		webConfig.TAVILY_SEARCH_API_BASE_URL =
 			payloadWeb.TAVILY_SEARCH_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
@@ -389,6 +476,7 @@
 			webConfig.TAVILY_EXTRACT_API_BASE_URL,
 			webConfig.TAVILY_EXTRACT_API_FORCE_MODE
 		);
+		syncPlaywrightModeFromConfig();
 		webConfig = webConfig;
 	};
 
@@ -482,6 +570,7 @@
 			loader: {
 				WEB_LOADER_ENGINE: webConfig.WEB_LOADER_ENGINE,
 				ENABLE_WEB_LOADER_SSL_VERIFICATION: webConfig.ENABLE_WEB_LOADER_SSL_VERIFICATION,
+				PLAYWRIGHT_MODE: playwrightMode,
 				PLAYWRIGHT_WS_URL: webConfig.PLAYWRIGHT_WS_URL,
 				PLAYWRIGHT_TIMEOUT: webConfig.PLAYWRIGHT_TIMEOUT,
 				FIRECRAWL_API_BASE_URL: webConfig.FIRECRAWL_API_BASE_URL,
@@ -503,26 +592,42 @@
 		{ value: '', label: $i18n.t('Default') },
 		...webLoaderEngines.map((engine) => ({
 			value: engine,
-			label: engine,
-			disabled:
-				(engine === 'playwright' && !runtimeCapabilities.playwright_available) ||
-				(engine === 'firecrawl' && !runtimeCapabilities.firecrawl_available)
+			label: getWebLoaderEngineLabel(engine),
+			disabled: isLoaderUnavailable(engine),
+			description: isLoaderUnavailable(engine) ? getLoaderAvailabilityMessage(engine) : undefined,
+			descriptionTone: isLoaderUnavailable(engine) ? 'warning' : undefined,
+			badge: isLoaderUnavailable(engine) ? tr('当前不可用', 'Unavailable') : undefined
 		}))
 	];
 	$: selectedLoaderCapabilityMessage =
-		webConfig?.WEB_LOADER_ENGINE === 'playwright'
-			? runtimeCapabilities.messages.playwright
-			: webConfig?.WEB_LOADER_ENGINE === 'firecrawl'
-				? runtimeCapabilities.messages.firecrawl
-				: '';
-	$: selectedLoaderUnavailable =
-		(webConfig?.WEB_LOADER_ENGINE === 'playwright' && !runtimeCapabilities.playwright_available) ||
-		(webConfig?.WEB_LOADER_ENGINE === 'firecrawl' && !runtimeCapabilities.firecrawl_available);
+		webConfig?.WEB_LOADER_ENGINE === 'firecrawl'
+			? getLoaderAvailabilityMessage('firecrawl')
+			: '';
+	$: selectedLoaderUnavailable = isLoaderUnavailable(String(webConfig?.WEB_LOADER_ENGINE || ''));
 	$: tavilySearchUrlState = parseTavilyUrlInput(tavilySearchBaseUrlInput, 'search');
 	$: tavilyExtractUrlState = parseTavilyUrlInput(tavilyExtractBaseUrlInput, 'extract');
+	$: playwrightVerifyFingerprint = webConfig
+		? JSON.stringify({
+				WEB_LOADER_ENGINE: String(webConfig.WEB_LOADER_ENGINE || ''),
+				PLAYWRIGHT_MODE: playwrightMode,
+				PLAYWRIGHT_WS_URL: String(webConfig.PLAYWRIGHT_WS_URL || '').trim(),
+				PLAYWRIGHT_TIMEOUT: String(webConfig.PLAYWRIGHT_TIMEOUT || '')
+			})
+		: '';
 	$: shouldShowTavilyVerify =
 		Boolean(webConfig) &&
 		(webConfig?.WEB_SEARCH_ENGINE === 'tavily' || webConfig?.WEB_LOADER_ENGINE === 'tavily');
+	$: if (webConfig?.WEB_LOADER_ENGINE !== 'playwright') {
+		playwrightVerifyResult = null;
+		lastPlaywrightVerifyFingerprint = '';
+	} else if (
+		playwrightVerifyResult &&
+		lastPlaywrightVerifyFingerprint &&
+		playwrightVerifyFingerprint !== lastPlaywrightVerifyFingerprint &&
+		!playwrightVerifyLoading
+	) {
+		playwrightVerifyResult = null;
+	}
 	$: tavilyVerifyFingerprint = webConfig
 		? JSON.stringify({
 				WEB_SEARCH_ENGINE: String(webConfig.WEB_SEARCH_ENGINE || ''),
@@ -550,6 +655,7 @@
 	let snapshot: ReturnType<typeof buildSnapshot> = null;
 	$: {
 		webConfig;
+		playwrightMode;
 		youtubeLanguage;
 		youtubeTranslation;
 		tavilySearchBaseUrlInput;
@@ -612,7 +718,9 @@
 				webConfig.TAVILY_EXTRACT_API_FORCE_MODE =
 					webConfig.TAVILY_EXTRACT_API_FORCE_MODE ?? false;
 				normalizeNumericWebConfig(webConfig);
-				webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = listToCsv(webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST);
+				webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = listToCsv(
+					webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST
+				);
 				webConfig.YOUTUBE_LOADER_LANGUAGE = listToCsv(webConfig.YOUTUBE_LOADER_LANGUAGE);
 				const langArray = csvToList(webConfig.YOUTUBE_LOADER_LANGUAGE);
 				youtubeLanguage = langArray.length > 0 ? langArray[0] : '';
@@ -625,6 +733,7 @@
 					webConfig.TAVILY_EXTRACT_API_BASE_URL,
 					webConfig.TAVILY_EXTRACT_API_FORCE_MODE
 				);
+				syncPlaywrightModeFromConfig();
 				initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
 			} else {
 				webConfig = null;
@@ -653,6 +762,21 @@
 		// Sync UI values back to webConfig
 		webConfig.YOUTUBE_LOADER_LANGUAGE = youtubeLanguage;
 		webConfig.YOUTUBE_LOADER_TRANSLATION = youtubeTranslation;
+		if (webConfig.WEB_LOADER_ENGINE === 'playwright') {
+			webConfig.PLAYWRIGHT_TIMEOUT = normalizeNumericField(
+				'PLAYWRIGHT_TIMEOUT',
+				webConfig.PLAYWRIGHT_TIMEOUT
+			);
+			if (playwrightMode === 'remote' && !String(webConfig.PLAYWRIGHT_WS_URL || '').trim()) {
+				toast.error(
+					tr(
+						'外部浏览器服务模式需要填写 Playwright WebSocket 地址。',
+						'External browser service mode requires a Playwright WebSocket URL.'
+					)
+				);
+				return false;
+			}
+		}
 
 		if (tavilySearchUrlState.error) {
 			toast.error(tavilySearchUrlState.error);
@@ -672,6 +796,10 @@
 
 		// Use a copy so the UI stays as CSV strings even if the request fails.
 		const payloadWeb = normalizeNumericWebConfig({ ...webConfig }, true);
+		if (payloadWeb.WEB_LOADER_ENGINE === 'playwright') {
+			payloadWeb.PLAYWRIGHT_WS_URL =
+				playwrightMode === 'remote' ? String(payloadWeb.PLAYWRIGHT_WS_URL || '').trim() : '';
+		}
 		payloadWeb.TAVILY_API_KEY = String(payloadWeb.TAVILY_API_KEY || '').trim();
 		payloadWeb.TAVILY_SEARCH_API_BASE_URL = tavilySearchUrlState.baseUrl;
 		payloadWeb.TAVILY_SEARCH_API_FORCE_MODE = tavilySearchUrlState.forceMode;
@@ -775,6 +903,53 @@
 		}
 	};
 
+	const verifyPlaywrightConfig = async () => {
+		if (!webConfig || playwrightVerifyLoading) return;
+
+		const timeout = normalizeNumericField('PLAYWRIGHT_TIMEOUT', webConfig.PLAYWRIGHT_TIMEOUT);
+		if (playwrightMode === 'remote' && !String(webConfig.PLAYWRIGHT_WS_URL || '').trim()) {
+			toast.error(
+				tr(
+					'外部浏览器服务模式需要填写 Playwright WebSocket 地址。',
+					'External browser service mode requires a Playwright WebSocket URL.'
+				)
+			);
+			return;
+		}
+
+		playwrightVerifyLoading = true;
+		try {
+			const result = await verifyPlaywrightWebConfig(localStorage.token, {
+				PLAYWRIGHT_MODE: playwrightMode,
+				PLAYWRIGHT_WS_URL:
+					playwrightMode === 'remote' ? String(webConfig.PLAYWRIGHT_WS_URL || '').trim() : '',
+				PLAYWRIGHT_TIMEOUT: timeout
+			});
+			playwrightVerifyResult = result;
+			lastPlaywrightVerifyFingerprint = playwrightVerifyFingerprint;
+			webConfig.PLAYWRIGHT_TIMEOUT = timeout;
+
+			if (result.ok) {
+				toast.success(tr('Playwright 连接检测通过', 'Playwright connection verified successfully.'));
+			} else {
+				toast.warning(
+					tr(
+						'Playwright 连接检测已完成，请检查提示信息。',
+						'Playwright connection verification completed. Please review the message.'
+					)
+				);
+			}
+		} catch (error) {
+			console.error('Failed to verify Playwright config', error);
+			toast.error(
+				formatValidationError(error) ??
+					tr('Playwright 连接检测失败', 'Failed to verify Playwright connection.')
+			);
+		} finally {
+			playwrightVerifyLoading = false;
+		}
+	};
+
 	onMount(loadConfig);
 
 	const resetSectionChanges = (section: 'webSearch' | 'loader') => {
@@ -787,6 +962,10 @@
 			tavilySearchBaseUrlInput = initialSnapshot.webSearch.TAVILY_SEARCH_API_BASE_URL_INPUT;
 		}
 		if (section === 'loader') {
+			playwrightMode = normalizePlaywrightMode(
+				initialSnapshot.loader.PLAYWRIGHT_MODE ??
+					(String(initialSnapshot.loader.PLAYWRIGHT_WS_URL || '').trim() ? 'remote' : 'local')
+			);
 			youtubeLanguage = initialSnapshot.loader.YOUTUBE_LOADER_LANGUAGE;
 			youtubeTranslation = initialSnapshot.loader.YOUTUBE_LOADER_TRANSLATION;
 			tavilyExtractBaseUrlInput = initialSnapshot.loader.TAVILY_EXTRACT_API_BASE_URL_INPUT;
@@ -864,11 +1043,11 @@
 												{saving}
 												on:reset={() => resetSectionChanges(selectedTab === 'webSearch' ? 'webSearch' : 'loader')}
 											/>
+											</div>
+											<p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+												{tr(activeTabMeta.descriptionKey, activeTabMeta.descriptionDefault)}
+											</p>
 										</div>
-										<p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-											{$i18n.t(activeTabMeta.description)}
-										</p>
-									</div>
 								</div>
 							</div>
 
@@ -1494,28 +1673,36 @@
 					class="scroll-mt-2 p-5 space-y-5 transition-all duration-300 {dirtySections.loader
 						? 'glass-section glass-section-dirty'
 						: 'glass-section'}"
-				>
-					<div class="space-y-3">
-							<!-- Loader Engine -->
-							<div
-								class="glass-item px-4 py-3"
-							>
-								<div class="flex items-center justify-between">
-									<div class="text-sm font-medium">{$i18n.t('Web Loader Engine')}</div>
-									<HaloSelect
-										bind:value={webConfig.WEB_LOADER_ENGINE}
-										options={loaderEngineOptions}
-										placeholder={$i18n.t('Select a engine')}
-										className="w-fit capitalize"
-									/>
+					>
+						<div class="space-y-3">
+								<!-- Loader Engine -->
+								<div
+									class="glass-item px-4 py-3"
+								>
+									<div class="flex items-start justify-between gap-4">
+										<div class="min-w-0 space-y-1">
+											<div class="text-sm font-medium">{$i18n.t('Web Loader Engine')}</div>
+											<div class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+												{tr(
+													'网页加载器用于在获取网页链接后加载页面，并提取可供模型使用的正文内容。',
+													'The web loader loads linked pages and extracts the primary content used by the model.'
+												)}
+											</div>
+										</div>
+										<HaloSelect
+											bind:value={webConfig.WEB_LOADER_ENGINE}
+											options={loaderEngineOptions}
+											placeholder={$i18n.t('Select a engine')}
+											className="w-fit capitalize"
+										/>
+									</div>
 								</div>
-							</div>
 
-							{#if selectedLoaderUnavailable}
-								<div class="rounded-xl border border-amber-200/70 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
-									{selectedLoaderCapabilityMessage}
-								</div>
-							{/if}
+								{#if selectedLoaderUnavailable}
+									<div class="rounded-xl border border-amber-200/70 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+										{selectedLoaderCapabilityMessage}
+									</div>
+								{/if}
 
 							<!-- Engine-specific config -->
 							{#if webConfig.WEB_LOADER_ENGINE === '' || webConfig.WEB_LOADER_ENGINE === 'safe_web'}
@@ -1525,34 +1712,117 @@
 									<div class="text-sm font-medium">{$i18n.t('Verify SSL Certificate')}</div>
 									<Switch bind:state={webConfig.ENABLE_WEB_LOADER_SSL_VERIFICATION} />
 								</div>
-							{:else if webConfig.WEB_LOADER_ENGINE === 'playwright'}
-								<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-									<div
-										class="glass-item p-4"
-									>
-										<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Playwright WebSocket URL')}</div>
-										<input
-											class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-											type="text"
-											placeholder={$i18n.t('Enter Playwright WebSocket URL')}
-											bind:value={webConfig.PLAYWRIGHT_WS_URL}
-											autocomplete="off"
-										/>
+								{:else if webConfig.WEB_LOADER_ENGINE === 'playwright'}
+									<div class="space-y-3">
+										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+											<div class="glass-item p-4 space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">
+													{tr('Playwright 运行方式', 'Playwright Mode')}
+												</div>
+												<HaloSelect
+													bind:value={playwrightMode}
+													options={playwrightModeOptions}
+													className="w-full"
+													contentClassName="w-[24rem]"
+												/>
+											</div>
+											<div class="glass-item p-4">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Playwright Timeout (ms)')}</div>
+												<input
+													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+													type="number"
+													placeholder={$i18n.t('Enter Playwright Timeout')}
+													bind:value={webConfig.PLAYWRIGHT_TIMEOUT}
+													autocomplete="off"
+												/>
+											</div>
+										</div>
+
+										<div class="rounded-xl border border-gray-200/80 bg-white/70 px-4 py-3 text-xs leading-relaxed text-gray-600 dark:border-gray-700/70 dark:bg-gray-900/30 dark:text-gray-300">
+											{#if playwrightMode === 'remote'}
+												{tr(
+													'外部浏览器服务模式会连接独立浏览器服务，请填写可访问的 Playwright WebSocket 地址。',
+													'External browser service mode connects to a dedicated browser service. Enter an accessible Playwright WebSocket URL.'
+												)}
+											{:else}
+												{tr(
+													'本地浏览器模式会由当前服务端直接启动浏览器。若使用 Docker 默认部署，请确认镜像已包含 Playwright 依赖与 Chromium。',
+													'Local browser mode launches the browser directly on the current server. If you use the default Docker deployment, ensure the image includes Playwright dependencies and Chromium.'
+												)}
+											{/if}
+										</div>
+
+										{#if playwrightMode === 'remote'}
+											<div class="glass-item p-4">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Playwright WebSocket URL')}</div>
+												<input
+													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+													type="text"
+													placeholder={$i18n.t('Enter Playwright WebSocket URL')}
+													bind:value={webConfig.PLAYWRIGHT_WS_URL}
+													autocomplete="off"
+												/>
+											</div>
+										{/if}
+
+										<div class="glass-item p-4 space-y-3">
+											<div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+												<div class="space-y-1">
+													<div class="text-sm font-medium text-gray-800 dark:text-gray-100">
+														{tr('检测 Playwright 连接', 'Verify Playwright Connection')}
+													</div>
+													<div class="text-xs text-gray-500 dark:text-gray-400">
+														{tr(
+															'直接检测当前 Playwright 模式与连接参数，不会保存也不会改动已生效设置。',
+															'Verify the current Playwright mode and connection parameters without saving or changing the active configuration.'
+														)}
+													</div>
+												</div>
+												<button
+													type="button"
+													class="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200/80 bg-white/80 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700/80 dark:bg-gray-900/70 dark:text-gray-200 dark:hover:bg-gray-800/80 disabled:cursor-not-allowed disabled:opacity-60"
+													on:click={verifyPlaywrightConfig}
+													disabled={playwrightVerifyLoading}
+												>
+													{#if playwrightVerifyLoading}
+														<Spinner className="size-4" />
+													{/if}
+													<span>
+														{playwrightVerifyLoading
+															? tr('正在检测…', 'Verifying...')
+															: tr('检测连接', 'Verify Connection')}
+													</span>
+												</button>
+											</div>
+
+											{#if playwrightVerifyResult}
+												<div
+													class={`rounded-2xl border px-4 py-3 ${
+														playwrightVerifyResult.ok
+															? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300'
+															: 'border-rose-200/80 bg-rose-50/80 text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-300'
+													}`}
+												>
+													<div class="flex items-center justify-between gap-3">
+														<div class="text-sm font-medium">
+															{playwrightVerifyResult.mode === 'remote'
+																? tr('外部浏览器服务', 'External Browser Service')
+																: tr('本地浏览器', 'Local Browser')}
+														</div>
+														<div class="text-xs font-medium">
+															{playwrightVerifyResult.ok
+																? tr('可用', 'Available')
+																: tr('不可用', 'Unavailable')}
+														</div>
+													</div>
+													<div class="mt-2 text-xs leading-5">
+														{playwrightVerifyResult.message}
+													</div>
+												</div>
+											{/if}
+										</div>
 									</div>
-									<div
-										class="glass-item p-4"
-									>
-										<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Playwright Timeout (ms)')}</div>
-										<input
-											class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-											type="number"
-											placeholder={$i18n.t('Enter Playwright Timeout')}
-											bind:value={webConfig.PLAYWRIGHT_TIMEOUT}
-											autocomplete="off"
-										/>
-									</div>
-								</div>
-							{:else if webConfig.WEB_LOADER_ENGINE === 'firecrawl'}
+								{:else if webConfig.WEB_LOADER_ENGINE === 'firecrawl'}
 								<div class="space-y-3">
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div

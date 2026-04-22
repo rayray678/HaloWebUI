@@ -126,6 +126,12 @@ export type TavilyConfigVerifyResponse = {
 	loader: TavilyConfigVerifyItem;
 };
 
+export type PlaywrightConfigVerifyResponse = {
+	mode: 'local' | 'remote';
+	ok: boolean;
+	message: string;
+};
+
 export const updateRAGConfig = async (token: string, payload: RAGConfigForm) => {
 	let error = null;
 
@@ -160,6 +166,34 @@ export const verifyTavilyWebConfig = async (
 	let error = null;
 
 	const res = await fetch(`${RETRIEVAL_API_BASE_URL}/config/web/verify`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(payload)
+	})
+		.then(parseJsonResponse)
+		.catch((err) => {
+			console.log(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const verifyPlaywrightWebConfig = async (
+	token: string,
+	payload: Record<string, unknown>
+): Promise<PlaywrightConfigVerifyResponse> => {
+	let error = null;
+
+	const res = await fetch(`${RETRIEVAL_API_BASE_URL}/config/web/playwright/verify`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',

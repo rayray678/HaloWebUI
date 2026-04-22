@@ -15,7 +15,7 @@ IF /I "%WEB_LOADER_ENGINE%" == "playwright" (
         playwright install-deps chromium
     )
     IF !ERRORLEVEL! NEQ 0 (
-        echo Playwright optional dependency missing. Install backend/requirements/web-playwright.txt or use INSTALL_PROFILE=full.
+        echo Playwright dependency missing. Rebuild with INSTALL_PROFILE=core or INSTALL_PROFILE=full.
     )
 
     python -c "import importlib.util; spec = importlib.util.find_spec('nltk'); print('nltk optional dependency missing; skipping punkt_tab download.') if spec is None else __import__('nltk').download('punkt_tab')"

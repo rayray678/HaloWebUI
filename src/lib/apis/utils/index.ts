@@ -104,6 +104,10 @@ export const downloadChatAsPDF = async (token: string, title: string, messages: 
 			return null;
 		});
 
+	if (error) {
+		throw error?.detail ?? error;
+	}
+
 	return blob;
 };
 

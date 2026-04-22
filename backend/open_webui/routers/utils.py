@@ -151,7 +151,11 @@ async def download_chat_as_pdf(
     form_data: ChatTitleMessagesForm, user=Depends(get_verified_user)
 ):
     try:
-        pdf_bytes = PDFGenerator(form_data).generate_chat_pdf()
+        pdf_bytes = PDFGenerator(
+            form_data,
+            user_id=getattr(user, "id", None),
+            is_admin=getattr(user, "role", None) == "admin",
+        ).generate_chat_pdf()
 
         return Response(
             content=pdf_bytes,
@@ -160,7 +164,8 @@ async def download_chat_as_pdf(
         )
     except Exception as e:
         log.exception(f"Error generating PDF: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        detail = str(e).strip() or "服务端生成 PDF 失败，请稍后重试。"
+        raise HTTPException(status_code=400, detail=detail)
 
 
 @router.get("/db/download")

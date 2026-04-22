@@ -227,6 +227,94 @@ def _build_tavily_loader_runtime_notice(
     return notice
 
 
+def _normalize_playwright_verify_timeout(timeout_ms: Optional[int]) -> int:
+    if isinstance(timeout_ms, int) and timeout_ms > 0:
+        return min(timeout_ms, 120000)
+    return 10000
+
+
+def _verify_playwright_loader(
+    *,
+    mode: Literal["local", "remote"],
+    playwright_ws_url: Optional[str] = None,
+    playwright_timeout: Optional[int] = None,
+) -> dict[str, Any]:
+    timeout_ms = _normalize_playwright_verify_timeout(playwright_timeout)
+    ws_url = str(playwright_ws_url or "").strip()
+
+    if mode == "remote" and not ws_url:
+        return {
+            "mode": "remote",
+            "ok": False,
+            "message": "外部浏览器服务模式需要填写 Playwright WebSocket 地址。",
+        }
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        return {
+            "mode": mode,
+            "ok": False,
+            "message": (
+                "当前服务端未启用 Playwright 网页加载能力："
+                f"{_extract_error_text_from_exception(exc)}"
+            ),
+        }
+
+    browser = None
+    page = None
+    try:
+        with sync_playwright() as playwright:
+            if mode == "remote":
+                browser = playwright.chromium.connect(ws_url, timeout=timeout_ms)
+            else:
+                browser = playwright.chromium.launch(headless=True, timeout=timeout_ms)
+
+            page = browser.new_page()
+            page.set_content(
+                "<html><head><title>playwright verify</title></head><body>ok</body></html>",
+                timeout=timeout_ms,
+            )
+
+            return {
+                "mode": mode,
+                "ok": True,
+                "message": (
+                    "外部浏览器服务连接正常，可用于网页加载。"
+                    if mode == "remote"
+                    else "本地浏览器模式可用，可用于网页加载。"
+                ),
+            }
+    except Exception as exc:
+        if mode == "remote":
+            message = (
+                "外部浏览器服务连接失败，请检查 Playwright WebSocket 地址和浏览器服务状态："
+                f"{_extract_error_text_from_exception(exc)}"
+            )
+        else:
+            message = (
+                "本地浏览器模式不可用，请确认当前服务端已安装 Playwright 依赖与 Chromium 浏览器："
+                f"{_extract_error_text_from_exception(exc)}"
+            )
+
+        return {
+            "mode": mode,
+            "ok": False,
+            "message": message,
+        }
+    finally:
+        if page is not None:
+            try:
+                page.close()
+            except Exception:
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
 async def _load_web_documents_with_loader(
     request: Request,
     urls: Sequence[str],
@@ -294,6 +382,12 @@ class WebConfigVerifyForm(BaseModel):
     TAVILY_EXTRACT_API_BASE_URL: Optional[str] = None
     TAVILY_EXTRACT_API_FORCE_MODE: Optional[bool] = False
     TAVILY_EXTRACT_DEPTH: Optional[str] = None
+
+
+class PlaywrightConfigVerifyForm(BaseModel):
+    PLAYWRIGHT_MODE: Optional[Literal["local", "remote"]] = None
+    PLAYWRIGHT_WS_URL: Optional[str] = None
+    PLAYWRIGHT_TIMEOUT: Optional[int] = None
 
 
 @router.get("/")
@@ -1436,6 +1530,29 @@ async def verify_web_config(
         "search": search_result,
         "loader": loader_result,
     }
+
+
+@router.post("/config/web/playwright/verify")
+async def verify_playwright_web_config(
+    form_data: PlaywrightConfigVerifyForm,
+    user=Depends(get_admin_user),
+):
+    del user
+
+    requested_mode = str(form_data.PLAYWRIGHT_MODE or "").strip()
+    mode: Literal["local", "remote"] = (
+        "remote" if requested_mode == "remote" else "local"
+    )
+
+    if not requested_mode and str(form_data.PLAYWRIGHT_WS_URL or "").strip():
+        mode = "remote"
+
+    return await run_in_threadpool(
+        _verify_playwright_loader,
+        mode=mode,
+        playwright_ws_url=form_data.PLAYWRIGHT_WS_URL,
+        playwright_timeout=form_data.PLAYWRIGHT_TIMEOUT,
+    )
 
 ####################################
 #

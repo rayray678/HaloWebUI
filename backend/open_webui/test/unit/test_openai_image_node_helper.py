@@ -108,6 +108,25 @@ def test_send_openai_image_request_parses_official_stream(monkeypatch):
     assert json.loads(result["response_body"])["data"] == [{"b64_json": b64_image}]
 
 
+def test_build_openai_image_usage_includes_elapsed_without_upstream_tokens():
+    usage = images_router._build_openai_image_usage({"data": []}, 1234)
+
+    assert usage == {"total_duration": 1_234_000_000}
+
+
+def test_build_openai_image_usage_preserves_upstream_tokens_and_speed():
+    usage = images_router._build_openai_image_usage(
+        {"usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}},
+        2000,
+    )
+
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 20
+    assert usage["total_tokens"] == 30
+    assert usage["total_duration"] == 2_000_000_000
+    assert usage["response_token/s"] == 10
+
+
 def test_send_openai_image_request_uses_httpx_multipart(monkeypatch):
     captured = {}
 

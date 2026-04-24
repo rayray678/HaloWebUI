@@ -3029,6 +3029,18 @@ def _parse_openai_image_stream_response(stream_text: str) -> dict[str, Any]:
     return body
 
 
+def _build_openai_image_usage(body: Any, elapsed_ms: Optional[int]) -> Optional[dict[str, Any]]:
+    upstream_usage = body.get("usage") if isinstance(body, dict) else None
+    usage = dict(upstream_usage) if isinstance(upstream_usage, dict) else {}
+
+    if isinstance(elapsed_ms, int) and elapsed_ms > 0:
+        usage["total_duration"] = elapsed_ms * 1_000_000
+        output_tokens = usage.get("output_tokens") or usage.get("completion_tokens")
+        if isinstance(output_tokens, (int, float)) and output_tokens > 0:
+            usage["response_token/s"] = float(output_tokens) / (elapsed_ms / 1000)
+    return usage or None
+
+
 async def _send_openai_image_request(
     *,
     url: str,
@@ -3369,6 +3381,7 @@ async def _generate_via_openai_image_edits_endpoint(
         result,
         default_message="Invalid JSON response from upstream /images/edits",
     )
+    usage = _build_openai_image_usage(response_body, result.get("elapsed_ms"))
     images = _extract_generated_images_from_openai_response(
         response_body,
         headers=headers,
@@ -3383,6 +3396,7 @@ async def _generate_via_openai_image_edits_endpoint(
     return [
         {
             "url": upload_image(request, payload, output_image_bytes, mime_type, user),
+            **({"usage": usage} if usage else {}),
         }
         for output_image_bytes, mime_type in images
     ]
@@ -3473,6 +3487,7 @@ async def _generate_via_openai_images_endpoint(
         result,
         default_message="Invalid JSON response from upstream /images/generations",
     )
+    usage = _build_openai_image_usage(response_body, result.get("elapsed_ms"))
     images = _extract_generated_images_from_openai_response(
         response_body,
         headers=headers,
@@ -3487,6 +3502,7 @@ async def _generate_via_openai_images_endpoint(
     return [
         {
             "url": upload_image(request, payload, image_bytes, mime_type, user),
+            **({"usage": usage} if usage else {}),
         }
         for image_bytes, mime_type in images
     ]

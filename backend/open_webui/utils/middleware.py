@@ -2954,7 +2954,16 @@ async def chat_image_generation_handler(
                 "data": {"description": "Generated an image", "done": True},
             }
         )
+        image_usage = next(
+            (
+                image.get("usage")
+                for image in images
+                if isinstance(image, dict) and isinstance(image.get("usage"), dict)
+            ),
+            None,
+        )
         __metadata__["local_response"] = {
+            **({"usage": image_usage} if image_usage else {}),
             "choices": [
                 {
                     "message": {
@@ -3903,6 +3912,7 @@ async def process_chat_response(
                 )
 
             choices = response.get("choices", [])
+            response_usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
             if choices and isinstance(choices[0], dict):
                 message_payload = choices[0].get("message", {}) or {}
                 content, message_files = _extract_stream_content_and_files(
@@ -3945,6 +3955,7 @@ async def process_chat_response(
                                 "title": title,
                                 "completedAt": completed_at,
                                 **({"files": message_files} if message_files else {}),
+                                **({"usage": response_usage} if response_usage else {}),
                             },
                         }
                     )
@@ -3958,6 +3969,7 @@ async def process_chat_response(
                             "done": True,
                             "completedAt": completed_at,
                             **({"files": message_files} if message_files else {}),
+                            **({"usage": response_usage} if response_usage else {}),
                         },
                     )
 

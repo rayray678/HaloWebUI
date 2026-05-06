@@ -16,6 +16,7 @@ CHAT_IMAGE_GENERATION_OPTION_KEYS = (
     "connection_index",
     "steps",
     "background",
+    "image_route_mode",
 )
 
 _IMAGE_GENERATION_OPTIONS_KEYS = ("image_generation_options", "imageGenerationOptions")

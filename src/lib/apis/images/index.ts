@@ -15,6 +15,7 @@ export type ImageGenerationRequest = {
 	connection_index?: number;
 	steps?: number;
 	background?: string;
+	image_route_mode?: 'auto' | 'generations' | 'chat' | 'responses' | 'edits' | string;
 };
 
 export type ImageUsageConfig = {
@@ -50,6 +51,8 @@ export type ImageGenerationModel = {
 	size_mode?: 'exact' | 'aspect_ratio' | 'unsupported' | string;
 	supports_image_size?: boolean;
 	supports_resolution?: boolean;
+	supported_image_routes?: string[];
+	default_image_route?: string | null;
 	text_output_supported?: boolean;
 	source?: 'settings' | 'personal' | 'shared' | string | null;
 	connection_index?: number | null;

@@ -38,6 +38,7 @@
 		aspect_ratio?: string | null;
 		resolution?: string | null;
 		n?: number | null;
+		image_route_mode?: string | null;
 	};
 
 	export let currentModel: Model | null = null;
@@ -81,6 +82,9 @@
 		}
 
 		const generationMode = `${model?.generation_mode ?? ''}`.trim().toLowerCase();
+		if (generationMode.startsWith('openai_') || provider === 'openai') {
+			return 'openai';
+		}
 		if (generationMode.startsWith('gemini_')) {
 			return 'gemini';
 		}
@@ -88,6 +92,23 @@
 			return 'grok';
 		}
 		return '';
+	};
+
+	const getOpenAIImageRouteOptions = (model: ImageGenerationModel | null) => {
+		const routes = Array.isArray(model?.supported_image_routes) ? model.supported_image_routes : [];
+		const hasRoute = (route: string) => routes.includes(route);
+		const options = [{ value: 'auto', label: tr('普通生图', 'Default') }];
+
+		if (hasRoute('chat') || model?.generation_mode === 'openai_chat_image') {
+			options.push({ value: 'chat', label: tr('对话图片', 'Chat Image') });
+		} else if (hasRoute('responses')) {
+			options.push({ value: 'responses', label: tr('对话图片', 'Chat Image') });
+		}
+		if (hasRoute('edits')) {
+			options.push({ value: 'edits', label: tr('编辑接口', 'Edit') });
+		}
+
+		return options;
 	};
 
 	const loadBuiltinContext = async () => {
@@ -220,16 +241,18 @@
 	$: showBuiltinPanel =
 		imageGenerationEnabled &&
 		builtinReady &&
-		['gemini', 'grok'].includes(builtinEngine) &&
+		['openai', 'gemini', 'grok'].includes(builtinEngine) &&
 		Boolean(builtinModelMeta) &&
-		modelSupportsNativeImageOptions(builtinModelMeta);
+		(builtinEngine === 'openai' || modelSupportsNativeImageOptions(builtinModelMeta));
 
 	$: showCustomPanel = Boolean(customFunctionId) && customHasImageFields;
 	$: showPanel = showCustomPanel || showBuiltinPanel || customLoading || builtinLoading;
 	$: panelTitle = showCustomPanel
 		? tr('画图参数', 'Image Options')
 		: showBuiltinPanel
-			? builtinEngine === 'grok'
+			? builtinEngine === 'openai'
+				? tr('OpenAI 图片参数', 'OpenAI Image Options')
+				: builtinEngine === 'grok'
 				? tr('Grok 绘图参数', 'Grok Image Options')
 				: tr('Gemini 绘图参数', 'Gemini Image Options')
 			: tr('图片参数', 'Image Settings');
@@ -256,6 +279,16 @@
 		value: option.value,
 		label: option.label
 	}));
+	$: openaiRouteOptions = getOpenAIImageRouteOptions(builtinModelMeta);
+	$: if (builtinEngine === 'openai' && imageGenerationOptions?.image_route_mode) {
+		const selectedRouteMode = `${imageGenerationOptions.image_route_mode}`.trim();
+		if (!openaiRouteOptions.some((option) => option.value === selectedRouteMode)) {
+			imageGenerationOptions = {
+				...imageGenerationOptions,
+				image_route_mode: null
+			};
+		}
+	}
 
 	$: customImageSizeOptions = getPropertyEnumOptions(
 		getImageValveProperty(customValvesSpec, 'image_size'),
@@ -289,7 +322,9 @@
 								{#if showCustomPanel}
 									{tr('当前自定义画图模型的常用参数', 'Common options for the current custom image model')}
 								{:else}
-									{builtinEngine === 'grok'
+									{builtinEngine === 'openai'
+										? tr('当前会按模型支持的图片接口发送', 'Uses the image endpoint supported by this model')
+										: builtinEngine === 'grok'
 										? tr('当前会直接传给 Grok 官方图片接口', 'These values will be sent directly to the Grok image API')
 										: tr('当前会直接传给 Gemini 官方图片接口', 'These values will be sent directly to the Gemini image API')}
 								{/if}
@@ -382,6 +417,24 @@
 							</div>
 						{/if}
 					{:else if showBuiltinPanel}
+						{#if builtinEngine === 'openai'}
+							<div class="space-y-1.5">
+								<div class="text-xs font-medium text-gray-500 dark:text-gray-400">
+									{tr('接口模式', 'Route Mode')}
+								</div>
+								<HaloSelect
+									value={`${imageGenerationOptions?.image_route_mode ?? 'auto'}`}
+									options={openaiRouteOptions}
+									className="w-full text-xs"
+									on:change={(e) => {
+										imageGenerationOptions = {
+											...imageGenerationOptions,
+											image_route_mode: e.detail.value === 'auto' ? null : e.detail.value
+										};
+									}}
+								/>
+							</div>
+						{/if}
 						{#if builtinModelMeta?.supports_image_size}
 							<div class="space-y-1.5">
 								<div class="text-xs font-medium text-gray-500 dark:text-gray-400">

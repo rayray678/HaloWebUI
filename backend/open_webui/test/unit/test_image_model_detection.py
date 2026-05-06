@@ -31,6 +31,7 @@ def test_openai_dedicated_image_model_uses_images_mode_for_relays():
     assert classified["generation_mode"] == "openai_images"
     assert classified["text_output_supported"] is False
     assert classified["detection_method"] == "metadata"
+    assert classified["default_image_route"] == "generations"
 
 
 def test_openai_output_image_chat_model_uses_chat_image_mode_for_relays():
@@ -48,6 +49,41 @@ def test_openai_output_image_chat_model_uses_chat_image_mode_for_relays():
     assert classified is not None
     assert classified["generation_mode"] == "openai_chat_image"
     assert classified["detection_method"] == "metadata"
+    assert classified["default_image_route"] == "chat"
+
+
+def test_openai_chat_completions_endpoint_prefers_chat_image_route():
+    classified = _classify_openai_image_model(
+        {
+            "id": "gemini-3.1-flash-image-preview",
+            "name": "gemini-3.1-flash-image-preview",
+            "description": "High quality image generation and conversational editing.",
+            "endpoints": ["/v1/chat/completions"],
+        },
+        base_url="https://relay.example/v1",
+        api_config={},
+        source={"effective_source": "personal", "provider": "openai"},
+    )
+
+    assert classified is not None
+    assert classified["generation_mode"] == "openai_chat_image"
+    assert classified["supported_image_routes"] == ["chat"]
+    assert classified["default_image_route"] == "chat"
+
+
+def test_openai_grok_imagine_video_is_not_detected_as_image_model():
+    classified = _classify_openai_image_model(
+        {
+            "id": "grok-imagine-video",
+            "name": "Grok Imagine Video",
+            "description": "Text to video generation model.",
+        },
+        base_url="https://relay.example/v1",
+        api_config={},
+        source={"effective_source": "personal", "provider": "openai"},
+    )
+
+    assert classified is None
 
 
 def test_openai_official_gpt_image_family_prefers_images_endpoint_mode():

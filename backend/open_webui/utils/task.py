@@ -46,6 +46,8 @@ DEDICATED_IMAGE_MODEL_HINTS = (
     "kandinsky",
 )
 
+NEGATIVE_IMAGE_MODEL_TOKENS = ("video",)
+
 IMAGE_ONLY_REGEXES = (
     re.compile(r"^gemini-3(?:\.\d+)?-(?:flash|pro)-image(?:[-.\w]+)?$"),
     re.compile(r"^grok(?:[-.\w]+)?-image(?:[-.\w]+)?$"),
@@ -98,6 +100,11 @@ def is_dedicated_image_generation_model(model: Optional[dict[str, Any]]) -> bool
         base_name = identity.strip().lower()
 
         if "vision" in base_name and "image" not in base_name:
+            continue
+        if any(
+            re.search(rf"(^|[\/._:-]){re.escape(token)}([\/._:-]|$)", base_name)
+            for token in NEGATIVE_IMAGE_MODEL_TOKENS
+        ):
             continue
 
         if any(pattern.search(base_name) for pattern in IMAGE_ONLY_REGEXES):

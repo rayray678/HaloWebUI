@@ -44,6 +44,10 @@ const DEDICATED_IMAGE_MODEL_PATTERNS = [
 ];
 
 const DEDICATED_IMAGE_MODEL_REGEXES = [/^grok(?:[-.\w]+)?-image(?:[-.\w]+)?$/i, /^sd[-.\w]+$/i];
+const NEGATIVE_IMAGE_MODEL_REGEXES = [/(^|[\/._:-])video([\/._:-]|$)/i];
+
+const isNegativeImageModel = (id: string): boolean =>
+	NEGATIVE_IMAGE_MODEL_REGEXES.some((pattern) => pattern.test(id));
 
 /**
  * 根据模型ID推断其能力
@@ -197,6 +201,10 @@ function inferFree(id: string): boolean {
 
 // 图像生成模型推断
 function inferImageGen(id: string): boolean {
+	if (isNegativeImageModel(id)) {
+		return false;
+	}
+
 	const imageGenPatterns = [
 		'dall-e',
 		'dalle',
@@ -230,6 +238,9 @@ export function isDedicatedImageGenerationModel(modelId: string): boolean {
 	const id = modelId.toLowerCase().split('/').pop() ?? modelId.toLowerCase();
 
 	if (id.includes('vision') && !id.includes('image')) {
+		return false;
+	}
+	if (isNegativeImageModel(id)) {
 		return false;
 	}
 

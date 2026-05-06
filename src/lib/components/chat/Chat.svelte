@@ -408,6 +408,7 @@
 		connection_index?: number | null;
 		steps?: number | null;
 		background?: string | null;
+		image_route_mode?: string | null;
 	};
 	let imageGenerationOptions: ImageGenerationOptions = {};
 	let webSearchMode: WebSearchMode = 'off';
@@ -1266,7 +1267,8 @@
 		'credential_source',
 		'connection_index',
 		'steps',
-		'background'
+		'background',
+		'image_route_mode'
 	] as const;
 
 	const sanitizeChatImageGenerationOptions = (options: unknown): ImageGenerationOptions => {

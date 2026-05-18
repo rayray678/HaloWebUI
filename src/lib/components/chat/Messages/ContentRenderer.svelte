@@ -16,6 +16,7 @@
 	import FloatingButtons from '../ContentRenderer/FloatingButtons.svelte';
 	import { createMessagesList } from '$lib/utils';
 	import { getCitationEntries } from '$lib/utils/citations';
+	import type { GeneratedMessageFile } from '$lib/utils/generated-file-links';
 	import { resolveChatTransitionMode } from '$lib/utils/lobehub-chat-appearance';
 	import {
 		createEmptySelectionThreads,
@@ -71,6 +72,7 @@
 	export let history;
 	export let model = null;
 	export let sources = null;
+	export let generatedFiles: GeneratedMessageFile[] = [];
 
 	export let save = false;
 	export let floatingButtons = true;
@@ -700,6 +702,7 @@
 			{model}
 			{save}
 			{streaming}
+			{generatedFiles}
 			transitionMode={currentTransitionMode}
 			sourceIds={(sources ?? []).reduce((acc, s) => {
 				if (!s || typeof s !== 'object') {

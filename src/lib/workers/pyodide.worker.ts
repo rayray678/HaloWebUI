@@ -13,6 +13,126 @@ declare global {
 	}
 }
 
+type GeneratedFile = {
+	name: string;
+	path: string;
+	size: number;
+	content_base64: string;
+};
+
+type GeneratedFilesCollection = {
+	files: GeneratedFile[];
+	warnings: string[];
+};
+
+const GENERATED_WORKSPACE_ROOT = '/mnt/generated';
+const MAX_GENERATED_FILES = 20;
+const MAX_GENERATED_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_GENERATED_TOTAL_BYTES = 50 * 1024 * 1024;
+
+const ensureDirectory = (path: string) => {
+	try {
+		self.pyodide.FS.stat(path);
+	} catch {
+		self.pyodide.FS.mkdirTree(path);
+	}
+};
+
+const normalizeRelativePath = (path: string) =>
+	path
+		.split('/')
+		.filter((part) => part && part !== '.')
+		.join('/');
+
+const uint8ArrayToBase64 = (data: Uint8Array) => {
+	const chunkSize = 0x8000;
+	let binary = '';
+	for (let offset = 0; offset < data.length; offset += chunkSize) {
+		binary += String.fromCharCode(...data.subarray(offset, offset + chunkSize));
+	}
+	return btoa(binary);
+};
+
+const collectGeneratedFiles = (roots: { root: string; prefix?: string }[]): GeneratedFilesCollection => {
+	const files: GeneratedFile[] = [];
+	const warnings: string[] = [];
+	let totalBytes = 0;
+
+	const walk = (root: string, current: string, prefix = '') => {
+		if (files.length >= MAX_GENERATED_FILES) {
+			return;
+		}
+
+		let entries: string[] = [];
+		try {
+			entries = self.pyodide.FS.readdir(current).filter(
+				(entry: string) => entry !== '.' && entry !== '..'
+			);
+		} catch {
+			return;
+		}
+
+		for (const entry of entries) {
+			if (files.length >= MAX_GENERATED_FILES) {
+				if (!warnings.includes('Generated file count limit reached.')) {
+					warnings.push('Generated file count limit reached.');
+				}
+				return;
+			}
+
+			const fullPath = `${current}/${entry}`.replace(/\/+/g, '/');
+			let stat;
+			try {
+				stat = self.pyodide.FS.stat(fullPath);
+			} catch {
+				continue;
+			}
+
+			if (self.pyodide.FS.isDir(stat.mode)) {
+				walk(root, fullPath, prefix);
+				continue;
+			}
+
+			if (!self.pyodide.FS.isFile(stat.mode) || stat.size < 0) {
+				continue;
+			}
+
+			const relativePath = normalizeRelativePath(
+				`${prefix ? `${prefix}/` : ''}${fullPath.slice(root.length).replace(/^\/+/, '')}`
+			);
+			if (!relativePath || relativePath.split('/').includes('..')) {
+				continue;
+			}
+
+			if (stat.size > MAX_GENERATED_FILE_BYTES) {
+				warnings.push(`Skipped oversized generated file: ${relativePath}`);
+				continue;
+			}
+			if (totalBytes + stat.size > MAX_GENERATED_TOTAL_BYTES) {
+				warnings.push(`Skipped generated file after total size limit: ${relativePath}`);
+				continue;
+			}
+
+			const data = self.pyodide.FS.readFile(fullPath) as Uint8Array;
+			const copy = new Uint8Array(data.length);
+			copy.set(data);
+			totalBytes += copy.byteLength;
+			files.push({
+				name: relativePath.split('/').pop() ?? 'generated-file',
+				path: relativePath,
+				size: copy.byteLength,
+				content_base64: uint8ArrayToBase64(copy)
+			});
+		}
+	};
+
+	for (const { root, prefix } of roots) {
+		walk(root, root, prefix);
+	}
+
+	return { files, warnings };
+};
+
 async function loadPyodideAndPackages(packages: string[] = []) {
 	self.stdout = null;
 	self.stderr = null;
@@ -43,8 +163,9 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 	let mountDir = '/mnt';
 	self.pyodide.FS.mkdirTree(mountDir);
 
-	// Create /mnt/uploads/ for user file uploads
+	// Create writable directories for user uploads and downloadable outputs.
 	self.pyodide.FS.mkdirTree('/mnt/uploads');
+	self.pyodide.FS.mkdirTree(GENERATED_WORKSPACE_ROOT);
 	// self.pyodide.FS.mount(self.pyodide.FS.filesystems.IDBFS, {}, mountDir);
 
 	// // Load persisted files from IndexedDB (Initial Sync)
@@ -99,7 +220,13 @@ self.onmessage = async (event) => {
 	// make sure loading is done
 	await loadPyodideAndPackages(self.packages);
 
+	const workDir = `${GENERATED_WORKSPACE_ROOT}/${String(id || 'run').replace(/[^a-zA-Z0-9_-]/g, '')}`;
+	ensureDirectory(workDir);
+	const previousCwd = (self.pyodide.FS as any).cwd();
+
 	try {
+		(self.pyodide.FS as any).chdir(workDir);
+
 		// check if matplotlib is imported in the code
 		if (code.includes('matplotlib')) {
 			// Override plt.show() to return base64 image
@@ -150,9 +277,23 @@ matplotlib.pyplot.show = show`);
 		// });
 	} catch (error) {
 		self.stderr = error instanceof Error ? error.message : String(error);
+	} finally {
+		try {
+			(self.pyodide.FS as any).chdir(previousCwd);
+		} catch {
+			(self.pyodide.FS as any).chdir('/');
+		}
 	}
 
-	self.postMessage({ id, result: self.result, stdout: self.stdout, stderr: self.stderr });
+	const { files: generatedFiles, warnings: fileWarnings } = collectGeneratedFiles([{ root: workDir }]);
+	(self as any).postMessage({
+		id,
+		result: self.result,
+		stdout: self.stdout,
+		stderr: self.stderr,
+		generated_files: generatedFiles,
+		file_warnings: fileWarnings
+	});
 };
 
 function processResult(result: any): any {

@@ -8,8 +8,21 @@ import {
 
 describe('chat-message-errors', () => {
 	it('treats attached files as visible output', () => {
-		expect(hasVisibleMessageFiles([{ type: 'image', url: '/api/v1/files/demo/content' }])).toBe(true);
+		expect(hasVisibleMessageFiles([{ type: 'image', url: '/api/v1/files/demo/content' }])).toBe(
+			true
+		);
 		expect(hasVisibleMessageFiles([{ type: 'image', id: 'file_123' }])).toBe(true);
+		expect(
+			hasVisibleMessageFiles([
+				{
+					type: 'file',
+					id: 'file_pdf',
+					name: 'report.pdf',
+					source: 'code_interpreter',
+					generated: true
+				}
+			])
+		).toBe(true);
 	});
 
 	it('does not treat empty file payloads as visible output', () => {
@@ -17,6 +30,7 @@ describe('chat-message-errors', () => {
 		expect(hasVisibleMessageFiles([{}])).toBe(false);
 		expect(hasVisibleMessageFiles(null)).toBe(false);
 		expect(hasVisibleMessageFiles([{ type: 'file', id: 'file_123' }])).toBe(false);
+		expect(hasVisibleMessageFiles([{ type: 'file', source: 'code_interpreter' }])).toBe(false);
 	});
 
 	it('hides missing-output errors when visible files already exist', () => {
@@ -29,7 +43,7 @@ describe('chat-message-errors', () => {
 
 	it('keeps tool-no-output errors hidden only when files are visible', () => {
 		const error = { type: 'tool_no_output', content: '工具调用已完成，但未生成可显示的最终回答。' };
-		const files = [{ type: 'image', id: 'file_123' }];
+		const files = [{ type: 'file', id: 'file_123', source: 'code_interpreter', generated: true }];
 
 		expect(shouldHideMissingOutputError(error, files)).toBe(true);
 		expect(getRenderableMessageError(error, files)).toBeNull();

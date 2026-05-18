@@ -98,7 +98,18 @@
 		id: string;
 		model: string;
 		content: string;
-		files?: { type: string; url: string }[];
+		files?: {
+			type?: string;
+			url?: string;
+			content_url?: string;
+			id?: string;
+			name?: string;
+			filename?: string;
+			path?: string;
+			source?: string;
+			generated?: boolean;
+			[key: string]: unknown;
+		}[];
 		timestamp: number;
 		role: string;
 		statusHistory?: {
@@ -169,6 +180,9 @@
 	}
 
 	$: hasVisibleAssistantOutput = getVisibleAssistantOutput(message?.content ?? '') !== '';
+	$: visibleMessageFiles = (message?.files ?? []).filter(
+		(file) => file?.source !== 'code_interpreter' && file?.generated !== true
+	);
 	$: hasVisibleMessageFiles = messageHasVisibleFiles(message?.files);
 	$: renderableMessageError = getRenderableMessageError(message?.error, message?.files);
 	$: hasVisibleThinkingOutput =
@@ -1036,9 +1050,9 @@
 							{/if}
 						{/if}
 
-						{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
+						{#if visibleMessageFiles.filter((f) => f.type === 'image').length > 0}
 							<div class="my-1 flex overflow-x-auto gap-2 flex-wrap">
-								{#each message.files as file}
+								{#each visibleMessageFiles as file}
 									<div>
 										{#if file.type === 'image'}
 											<Image
@@ -1181,6 +1195,7 @@
 												content={message.content}
 												streaming={!message.done}
 												{isLastMessage}
+												generatedFiles={message.files ?? []}
 												forceExpand={forceExpandContent}
 												sources={message.sources}
 												floatingButtons={message?.done &&

@@ -14,6 +14,7 @@
 	import markedKatexExtension from '$lib/utils/marked/katex-extension';
 	import citationExtension from '$lib/utils/marked/citation-extension';
 	import { extractHeadings, type HeadingItem } from '$lib/utils/headings';
+	import type { GeneratedMessageFile } from '$lib/utils/generated-file-links';
 
 	import MarkdownTokens from './Markdown/MarkdownTokens.svelte';
 	import { createSmoothStreamContentController } from './streaming/smoothStreamContent';
@@ -29,6 +30,7 @@
 
 	export let sourceIds = [];
 	export let headings: HeadingItem[] = [];
+	export let generatedFiles: GeneratedMessageFile[] = [];
 
 	export let onSourceClick: Function = () => {};
 	export let onTaskClick: Function = () => {};
@@ -190,6 +192,7 @@
 	messageId={id}
 	{save}
 	charAnimation={renderTransitionMode !== 'none'}
+	{generatedFiles}
 	{onTaskClick}
 	{onSourceClick}
 	on:update={(e) => {

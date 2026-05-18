@@ -11,16 +11,26 @@ export const hasVisibleMessageFiles = (files: unknown): boolean => {
 		}
 
 		const candidate = file as Record<string, unknown>;
-		if (`${candidate.type ?? ''}`.trim().toLowerCase() !== 'image') {
-			return false;
-		}
+		const type = `${candidate.type ?? ''}`.trim().toLowerCase();
+		const generated =
+			candidate.generated === true || `${candidate.source ?? ''}`.trim() === 'code_interpreter';
 
-		return ['url', 'id', 'name'].some((key) => `${candidate[key] ?? ''}`.trim() !== '');
+		return (
+			(type === 'image' || generated) &&
+			['url', 'content_url', 'id', 'name', 'filename', 'path'].some(
+				(key) => `${candidate[key] ?? ''}`.trim() !== ''
+			)
+		);
 	});
 };
 
 export const shouldHideMissingOutputError = (error: unknown, files: unknown): boolean => {
-	if (!hasVisibleMessageFiles(files) || !error || typeof error !== 'object' || Array.isArray(error)) {
+	if (
+		!hasVisibleMessageFiles(files) ||
+		!error ||
+		typeof error !== 'object' ||
+		Array.isArray(error)
+	) {
 		return false;
 	}
 

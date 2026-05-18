@@ -70,6 +70,7 @@
 	import ArrowRightCircle from '$lib/components/icons/ArrowRightCircle.svelte';
 	import MarkdownTokens from './MarkdownTokens.svelte';
 	import type { ComponentType } from 'svelte';
+	import type { GeneratedMessageFile } from '$lib/utils/generated-file-links';
 
 	export let token: Token;
 	export let alert: AlertData;
@@ -77,6 +78,7 @@
 	export let tokenIdx = 0;
 	export let onTaskClick: ((event: MouseEvent) => void) | undefined = undefined;
 	export let onSourceClick: ((event: MouseEvent) => void) | undefined = undefined;
+	export let generatedFiles: GeneratedMessageFile[] = [];
 </script>
 
 <!--
@@ -105,6 +107,12 @@ Renders the following Markdown as alerts:
 		<span class=" font-medium">{alert.type}</span>
 	</div>
 	<div class="pb-2">
-		<MarkdownTokens id={`${id}-${tokenIdx}`} tokens={alert.tokens} {onTaskClick} {onSourceClick} />
+		<MarkdownTokens
+			id={`${id}-${tokenIdx}`}
+			tokens={alert.tokens}
+			{onTaskClick}
+			{onSourceClick}
+			{generatedFiles}
+		/>
 	</div>
 </div>

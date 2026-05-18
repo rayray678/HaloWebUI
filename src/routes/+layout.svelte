@@ -245,7 +245,7 @@
 			packages: packages
 		});
 
-		setTimeout(() => {
+		const executionTimeout = setTimeout(() => {
 			if (executing) {
 				executing = false;
 				stderr = 'Execution Time Limit Exceeded';
@@ -274,6 +274,9 @@
 
 			console.log(id, data);
 
+			executing = false;
+			clearTimeout(executionTimeout);
+
 			data['stdout'] && (stdout = data['stdout']);
 			data['stderr'] && (stderr = data['stderr']);
 			data['result'] && (result = data['result']);
@@ -285,19 +288,21 @@
 							{
 								stdout: stdout,
 								stderr: stderr,
-								result: result
+								result: result,
+								generated_files: data.generated_files,
+								file_warnings: data.file_warnings
 							},
 							(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
 						)
 					)
 				);
 			}
-
-			executing = false;
+			pyodideWorker.terminate();
 		};
 
 		pyodideWorker.onerror = (event) => {
 			console.log('pyodideWorker.onerror', event);
+			clearTimeout(executionTimeout);
 
 			if (cb) {
 				cb(
@@ -314,6 +319,7 @@
 				);
 			}
 			executing = false;
+			pyodideWorker.terminate();
 		};
 	};
 

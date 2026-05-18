@@ -14,6 +14,8 @@ import inspect
 import re
 import ast
 import hashlib
+import mimetypes
+from io import BytesIO
 from difflib import get_close_matches
 from urllib.parse import urlparse
 
@@ -27,7 +29,7 @@ from starlette.responses import Response, StreamingResponse
 
 
 from open_webui.models.chats import Chats
-from open_webui.models.files import Files
+from open_webui.models.files import FileForm, Files
 from open_webui.models.users import Users
 from open_webui.socket.main import (
     get_event_call,
@@ -156,7 +158,12 @@ from open_webui.utils.filter import (
 from open_webui.utils.shared_tool_runtime import (
     ensure_selected_shared_tool_runtime_loaded,
 )
-from open_webui.utils.code_interpreter import execute_code_jupyter
+from open_webui.utils.code_interpreter import (
+    MAX_GENERATED_FILE_BYTES,
+    MAX_GENERATED_FILES,
+    MAX_GENERATED_TOTAL_BYTES,
+    execute_code_jupyter,
+)
 
 from open_webui.tasks import create_task, set_current_task_blocks_completion
 
@@ -395,6 +402,182 @@ def _merge_message_files(existing: Any, incoming: Any) -> list[dict]:
     return _normalize_message_files([*(existing or []), *(incoming or [])])
 
 
+def _is_code_interpreter_generated_file(file_item: Any) -> bool:
+    if not isinstance(file_item, dict):
+        return False
+    return (
+        file_item.get("generated") is True
+        or str(file_item.get("source") or "").strip() == "code_interpreter"
+    )
+
+
+def _safe_generated_file_path(value: Any) -> str:
+    path = str(value or "").replace("\\", "/").strip()
+    if not path or path.startswith("/") or path.startswith("//"):
+        return ""
+    if re.match(r"^[a-z][a-z0-9+.-]*:", path, re.IGNORECASE):
+        return ""
+
+    parts = [
+        part.strip() for part in path.split("/") if part.strip() and part.strip() != "."
+    ]
+    if not parts or any(part == ".." for part in parts):
+        return ""
+
+    return "/".join(parts)
+
+
+def _decode_generated_file_content(generated_file: dict) -> Optional[bytes]:
+    if "content_base64" in generated_file:
+        content_base64 = generated_file.get("content_base64")
+        if not isinstance(content_base64, str):
+            return None
+        if len(content_base64) > ((MAX_GENERATED_FILE_BYTES + 2) // 3) * 4:
+            return None
+        return base64.b64decode(content_base64, validate=True)
+
+    def decode_byte_list(values: Any) -> Optional[bytes]:
+        if not isinstance(values, list) or len(values) > MAX_GENERATED_FILE_BYTES:
+            return None
+
+        data = bytearray()
+        for item in values:
+            if type(item) is not int or item < 0 or item > 255:
+                return None
+            data.append(item)
+        return bytes(data)
+
+    content = generated_file.get("content") if "content" in generated_file else None
+    if isinstance(content, list):
+        return decode_byte_list(content)
+
+    if isinstance(content, dict):
+        values = content.get("data")
+        if isinstance(values, list):
+            return decode_byte_list(values)
+
+    return None
+
+
+def _register_code_interpreter_generated_files(
+    request: Request, user: UserModel, generated_files: Any
+) -> list[dict]:
+    if not isinstance(generated_files, list):
+        return []
+
+    registered_files: list[dict] = []
+    total_size = 0
+
+    for generated_file in generated_files:
+        if len(registered_files) >= MAX_GENERATED_FILES:
+            break
+
+        if not isinstance(generated_file, dict):
+            continue
+
+        relative_path = _safe_generated_file_path(
+            generated_file.get("path")
+            or generated_file.get("relative_path")
+            or generated_file.get("name")
+        )
+        fallback_name = _safe_generated_file_path(
+            generated_file.get("name") or generated_file.get("filename")
+        )
+        name = os.path.basename(relative_path) or os.path.basename(fallback_name)
+        if not relative_path:
+            relative_path = name
+        if not name:
+            continue
+
+        try:
+            content = _decode_generated_file_content(generated_file)
+        except Exception:
+            log.warning(
+                "Skipping generated file with invalid content payload: %s", name
+            )
+            continue
+
+        if content is None:
+            continue
+        if len(content) > MAX_GENERATED_FILE_BYTES:
+            continue
+        if total_size + len(content) > MAX_GENERATED_TOTAL_BYTES:
+            continue
+
+        file_id = str(uuid4())
+        storage_filename = f"{file_id}_{name}"
+        content_type = (
+            str(generated_file.get("content_type") or "").strip()
+            or mimetypes.guess_type(name)[0]
+            or "application/octet-stream"
+        )
+
+        file_path = None
+        try:
+            file_size, file_path = Storage.upload_file(
+                BytesIO(content), storage_filename
+            )
+            file_item = Files.insert_new_file(
+                user.id,
+                FileForm(
+                    **{
+                        "id": file_id,
+                        "filename": name,
+                        "path": file_path,
+                        "meta": {
+                            "name": name,
+                            "content_type": content_type,
+                            "size": file_size,
+                            "data": {
+                                "source": "code_interpreter",
+                                "path": relative_path or name,
+                            },
+                        },
+                    }
+                ),
+            )
+        except Exception:
+            if file_path:
+                try:
+                    Storage.delete_file(file_path)
+                except Exception:
+                    log.debug("Failed to clean up generated file upload: %s", file_path)
+            log.exception(
+                "Failed to register generated code interpreter file: %s", name
+            )
+            continue
+
+        if not file_item:
+            if file_path:
+                try:
+                    Storage.delete_file(file_path)
+                except Exception:
+                    log.debug("Failed to clean up generated file upload: %s", file_path)
+            continue
+
+        download_url = f"/api/v1/files/{file_id}/content?attachment=true"
+        content_url = f"/api/v1/files/{file_id}/content"
+        total_size += file_size
+        registered_files.append(
+            {
+                "type": "file",
+                "id": file_id,
+                "name": name,
+                "filename": name,
+                "url": download_url,
+                "content_url": content_url,
+                "size": file_size,
+                "content_type": content_type,
+                "path": relative_path or name,
+                "relative_path": relative_path or name,
+                "source": "code_interpreter",
+                "generated": True,
+            }
+        )
+
+    return registered_files
+
+
 def normalize_message_files(files: Any) -> list[dict]:
     # Backward-compatible alias for call sites introduced before helpers were
     # promoted to module scope with private-prefixed names.
@@ -612,10 +795,16 @@ def _has_visible_message_files(message_files: Any) -> bool:
         if not isinstance(file_item, dict):
             continue
 
-        if str(file_item.get("type") or "").strip().lower() != "image":
-            continue
+        file_type = str(file_item.get("type") or "").strip().lower()
+        generated = (
+            file_item.get("generated") is True
+            or str(file_item.get("source") or "").strip() == "code_interpreter"
+        )
+        visible_keys = ("url", "content_url", "id", "name", "filename", "path")
 
-        if any(str(file_item.get(key) or "").strip() for key in ("url", "id", "name")):
+        if (file_type == "image" or generated) and any(
+            str(file_item.get(key) or "").strip() for key in visible_keys
+        ):
             return True
 
     return False
@@ -1466,6 +1655,8 @@ def _extract_files_from_messages(messages: list[dict]) -> list[dict]:
         for f in msg_files:
             if not isinstance(f, dict):
                 continue
+            if _is_code_interpreter_generated_file(f):
+                continue
             file_id = f.get("id") or f.get("file_id") or ""
             if not file_id or file_id in file_ids_seen:
                 continue
@@ -1552,6 +1743,8 @@ def _get_file_item_processing_mode(file_item: Any) -> str:
 
 def _is_native_file_input_candidate(file_item: Any) -> bool:
     if not isinstance(file_item, dict):
+        return False
+    if _is_code_interpreter_generated_file(file_item):
         return False
     if file_item.get("type") != "file":
         return False
@@ -1916,6 +2109,8 @@ async def _ensure_requested_chat_file_modes(
 
     for file_item in regular_files:
         if not isinstance(file_item, dict) or file_item.get("type") != "file":
+            continue
+        if _is_code_interpreter_generated_file(file_item):
             continue
 
         file_id = _get_attachment_file_id(file_item)
@@ -3188,6 +3383,11 @@ async def chat_completion_files_handler(
 
     # J-7-16: Merge knowledge files back in for RAG processing.
     _regular_files = body.get("metadata", {}).get("files", None) or []
+    _regular_files = [
+        file_item
+        for file_item in _regular_files
+        if not _is_code_interpreter_generated_file(file_item)
+    ]
     native_file_input_ids = {
         str(file_id).strip()
         for file_id in (body.get("metadata", {}).get("native_file_input_file_ids") or [])
@@ -7618,6 +7818,7 @@ async def process_chat_response(
                                             else None
                                         ),
                                         request.app.state.config.CODE_INTERPRETER_JUPYTER_TIMEOUT,
+                                        capture_generated_files=True,
                                     )
                                 else:
                                     output = {
@@ -7690,6 +7891,68 @@ async def process_chat_response(
                                                 )
 
                                         output["result"] = "\n".join(resultLines)
+
+                                    raw_generated_files = []
+                                    registered_output_files = []
+
+                                    for file_item in output.get("files") or []:
+                                        if (
+                                            isinstance(file_item, dict)
+                                            and "content_base64" in file_item
+                                        ):
+                                            raw_generated_files.append(file_item)
+                                        else:
+                                            registered_output_files.append(file_item)
+
+                                    raw_generated_files.extend(
+                                        [
+                                            item
+                                            for item in output.get("generated_files")
+                                            or []
+                                            if isinstance(item, dict)
+                                        ]
+                                    )
+
+                                    registered_generated_files = (
+                                        _register_code_interpreter_generated_files(
+                                            request, user, raw_generated_files
+                                        )
+                                    )
+                                    output_files = _merge_message_files(
+                                        registered_output_files,
+                                        registered_generated_files,
+                                    )
+
+                                    file_warnings = output.get("file_warnings")
+                                    if (
+                                        isinstance(file_warnings, list)
+                                        and file_warnings
+                                    ):
+                                        warning_text = "\n".join(
+                                            str(warning)
+                                            for warning in file_warnings
+                                            if str(warning).strip()
+                                        )
+                                        if warning_text:
+                                            stderr = output.get("stderr") or ""
+                                            output["stderr"] = (
+                                                f"{stderr}\n{warning_text}".strip()
+                                            )
+
+                                    if output_files:
+                                        message_files = _merge_message_files(
+                                            message_files, output_files
+                                        )
+                                        await event_emitter(
+                                            {
+                                                "type": "files",
+                                                "data": {"files": output_files},
+                                            }
+                                        )
+
+                                    output.pop("files", None)
+                                    output.pop("generated_files", None)
+                                    output.pop("file_warnings", None)
                         except Exception as e:
                             output = str(e)
 

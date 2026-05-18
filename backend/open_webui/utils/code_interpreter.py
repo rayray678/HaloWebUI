@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from typing import Optional
 
@@ -22,6 +23,94 @@ class ResultModel(BaseModel):
     stdout: Optional[str] = ""
     stderr: Optional[str] = ""
     result: Optional[str] = ""
+    files: Optional[list[dict]] = None
+    file_warnings: Optional[list[str]] = None
+
+
+MAX_GENERATED_FILES = 20
+MAX_GENERATED_FILE_BYTES = 25 * 1024 * 1024
+MAX_GENERATED_TOTAL_BYTES = 50 * 1024 * 1024
+GENERATED_FILES_MARKER_START = "__OPEN_WEBUI_GENERATED_FILES_START__"
+GENERATED_FILES_MARKER_END = "__OPEN_WEBUI_GENERATED_FILES_END__"
+
+
+def _parse_generated_files_stdout(stdout: str) -> tuple[list[dict], list[str]]:
+    if not stdout:
+        return [], []
+
+    match = re.search(
+        rf"{re.escape(GENERATED_FILES_MARKER_START)}(.*?){re.escape(GENERATED_FILES_MARKER_END)}",
+        stdout,
+        re.DOTALL,
+    )
+    if not match:
+        return [], []
+
+    try:
+        payload = json.loads(match.group(1))
+    except Exception:
+        return [], ["Failed to parse generated file manifest."]
+
+    files = payload.get("files") if isinstance(payload, dict) else None
+    warnings = payload.get("warnings") if isinstance(payload, dict) else None
+    return (
+        files if isinstance(files, list) else [],
+        warnings if isinstance(warnings, list) else [],
+    )
+
+
+def _build_generated_files_collection_code() -> str:
+    return f"""
+import base64
+import json
+import os
+
+__owui_root = globals().get("__owui_generated_dir", os.getcwd())
+__owui_files = []
+__owui_warnings = []
+__owui_total = 0
+__owui_max_files = {MAX_GENERATED_FILES}
+__owui_max_file_bytes = {MAX_GENERATED_FILE_BYTES}
+__owui_max_total_bytes = {MAX_GENERATED_TOTAL_BYTES}
+
+for __owui_dirpath, __owui_dirnames, __owui_filenames in os.walk(__owui_root):
+    __owui_dirnames[:] = [d for d in __owui_dirnames if d != "__pycache__"]
+    for __owui_filename in __owui_filenames:
+        if len(__owui_files) >= __owui_max_files:
+            __owui_warnings.append("Generated file count limit reached.")
+            break
+
+        __owui_path = os.path.join(__owui_dirpath, __owui_filename)
+        try:
+            if not os.path.isfile(__owui_path):
+                continue
+            __owui_size = os.path.getsize(__owui_path)
+        except OSError:
+            continue
+
+        __owui_relative_path = os.path.relpath(__owui_path, __owui_root).replace(os.sep, "/")
+        if not __owui_relative_path or __owui_relative_path.startswith("../") or "/../" in __owui_relative_path:
+            continue
+
+        if __owui_size > __owui_max_file_bytes:
+            __owui_warnings.append(f"Skipped oversized generated file: {{__owui_relative_path}}")
+            continue
+        if __owui_total + __owui_size > __owui_max_total_bytes:
+            __owui_warnings.append(f"Skipped generated file after total size limit: {{__owui_relative_path}}")
+            continue
+
+        with open(__owui_path, "rb") as __owui_file:
+            __owui_data = base64.b64encode(__owui_file.read()).decode("ascii")
+        __owui_total += __owui_size
+        __owui_files.append({{
+            "name": os.path.basename(__owui_relative_path),
+            "path": __owui_relative_path,
+            "size": __owui_size,
+            "content_base64": __owui_data,
+        }})
+
+print("{GENERATED_FILES_MARKER_START}" + json.dumps({{"files": __owui_files, "warnings": __owui_warnings}}) + "{GENERATED_FILES_MARKER_END}")
+"""
 
 
 class JupyterCodeExecuter:
@@ -36,6 +125,7 @@ class JupyterCodeExecuter:
         token: str = "",
         password: str = "",
         timeout: int = 60,
+        capture_generated_files: bool = False,
     ):
         """
         :param base_url: Jupyter server URL (e.g., "http://localhost:8888")
@@ -49,6 +139,8 @@ class JupyterCodeExecuter:
         self.token = token
         self.password = password
         self.timeout = timeout
+        self.capture_generated_files = capture_generated_files
+        self.generated_workdir_name = f"open-webui-code-interpreter-{uuid.uuid4().hex}"
         self.kernel_id = ""
         self.session = aiohttp.ClientSession(base_url=self.base_url)
         self.params = {}
@@ -132,9 +224,44 @@ class JupyterCodeExecuter:
         async with websockets.connect(
             websocket_url, additional_headers=ws_headers
         ) as ws:
-            await self.execute_in_jupyter(ws)
+            setup_stderr = ""
+            if self.capture_generated_files:
+                setup_result = await self.execute_in_jupyter(
+                    ws,
+                    "\n".join(
+                        [
+                            "import os",
+                            f"__owui_generated_dir = os.path.abspath({json.dumps(self.generated_workdir_name)})",
+                            "os.makedirs(__owui_generated_dir, exist_ok=True)",
+                            "os.chdir(__owui_generated_dir)",
+                        ]
+                    ),
+                )
+                if setup_result.stderr:
+                    setup_stderr = setup_result.stderr
 
-    async def execute_in_jupyter(self, ws) -> None:
+            self.result = await self.execute_in_jupyter(ws, self.code)
+            if setup_stderr:
+                self.result.stderr = f"{setup_stderr}\n{self.result.stderr}".strip()
+
+            if self.capture_generated_files:
+                collect_result = await self.execute_in_jupyter(
+                    ws, _build_generated_files_collection_code()
+                )
+                files, warnings = _parse_generated_files_stdout(
+                    collect_result.stdout or ""
+                )
+                self.result.files = files or None
+                self.result.file_warnings = warnings or None
+
+                await self.execute_in_jupyter(
+                    ws,
+                    "import os, shutil\n"
+                    "__owui_root = globals().get('__owui_generated_dir', os.getcwd())\n"
+                    "shutil.rmtree(__owui_root, ignore_errors=True)\n",
+                )
+
+    async def execute_in_jupyter(self, ws, code: str) -> ResultModel:
         # send message
         msg_id = uuid.uuid4().hex
         await ws.send(
@@ -151,7 +278,7 @@ class JupyterCodeExecuter:
                     "parent_header": {},
                     "metadata": {},
                     "content": {
-                        "code": self.code,
+                        "code": code,
                         "silent": False,
                         "store_history": True,
                         "user_expressions": {},
@@ -195,16 +322,28 @@ class JupyterCodeExecuter:
             except asyncio.TimeoutError:
                 stderr += "\nExecution timed out."
                 break
-        self.result.stdout = stdout.strip()
-        self.result.stderr = stderr.strip()
-        self.result.result = "\n".join(result).strip() if result else ""
+        return ResultModel(
+            stdout=stdout.strip(),
+            stderr=stderr.strip(),
+            result="\n".join(result).strip() if result else "",
+        )
 
 
 async def execute_code_jupyter(
-    base_url: str, code: str, token: str = "", password: str = "", timeout: int = 60
+    base_url: str,
+    code: str,
+    token: str = "",
+    password: str = "",
+    timeout: int = 60,
+    capture_generated_files: bool = False,
 ) -> dict:
     async with JupyterCodeExecuter(
-        base_url, code, token, password, timeout
+        base_url,
+        code,
+        token,
+        password,
+        timeout,
+        capture_generated_files=capture_generated_files,
     ) as executor:
         result = await executor.run()
-        return result.model_dump()
+        return result.model_dump(exclude_none=True)

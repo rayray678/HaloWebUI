@@ -24,6 +24,10 @@
 	import { settings } from '$lib/stores';
 	import { isSvgMarkup, promoteSvgMarkupTokens } from './svgMarkupTokens';
 	import { getHeadingAnchorId } from '$lib/utils/headings';
+	import {
+		rewriteGeneratedFileHtmlLinks,
+		type GeneratedMessageFile
+	} from '$lib/utils/generated-file-links';
 
 	const dispatch = createEventDispatcher();
 
@@ -39,6 +43,7 @@
 	export let onSourceClick: Function = () => {};
 	export let charAnimation = false;
 	export let pathPrefix: number[] = [];
+	export let generatedFiles: GeneratedMessageFile[] = [];
 
 	let detailsOpenState = new Map<string, boolean>();
 
@@ -158,6 +163,7 @@
 					tokens={token.tokens}
 					{charAnimation}
 					{onSourceClick}
+					{generatedFiles}
 				/>
 			</svelte:element>
 		{:else if token.type === 'code'}
@@ -212,6 +218,7 @@
 													id={`${id}-${tokenIdx}-header-${headerIdx}`}
 													tokens={header.tokens}
 													{onSourceClick}
+													{generatedFiles}
 												/>
 											</div>
 										</div>
@@ -232,6 +239,7 @@
 													id={`${id}-${tokenIdx}-row-${rowIdx}-${cellIdx}`}
 													tokens={cell.tokens}
 													{onSourceClick}
+													{generatedFiles}
 												/>
 											</div>
 										</td>
@@ -259,7 +267,7 @@
 		{:else if token.type === 'blockquote'}
 			{@const alert = alertComponent(token)}
 			{#if alert}
-				<AlertRenderer {token} {alert} />
+				<AlertRenderer {token} {alert} {generatedFiles} />
 			{:else}
 				<blockquote dir="auto">
 					<svelte:self
@@ -270,6 +278,7 @@
 						{charAnimation}
 						{onTaskClick}
 						{onSourceClick}
+						{generatedFiles}
 					/>
 				</blockquote>
 			{/if}
@@ -305,6 +314,7 @@
 								{charAnimation}
 								{onTaskClick}
 								{onSourceClick}
+								{generatedFiles}
 							/>
 						</li>
 					{/each}
@@ -340,6 +350,7 @@
 								{charAnimation}
 								{onTaskClick}
 								{onSourceClick}
+								{generatedFiles}
 							/>
 						</li>
 					{/each}
@@ -366,12 +377,16 @@
 						{charAnimation}
 						{onTaskClick}
 						{onSourceClick}
+						{generatedFiles}
 					/>
 				</div>
 			</Collapsible>
 		{:else if token.type === 'html'}
 			{@const isSvgMarkupToken = isSvgMarkup(token.text)}
-			{@const html = DOMPurify.sanitize(token.text, { ADD_ATTR: ['style'] })}
+			{@const html = rewriteGeneratedFileHtmlLinks(
+				DOMPurify.sanitize(token.text, { ADD_ATTR: ['style'] }),
+				generatedFiles
+			)}
 			{#if isSvgMarkupToken}
 				<CodeBlock
 					id={`${id}-${tokenIdx}-html-svg`}
@@ -415,6 +430,7 @@
 					tokens={token.tokens ?? []}
 					{charAnimation}
 					{onSourceClick}
+					{generatedFiles}
 				/>
 			</p>
 		{:else if token.type === 'text'}
@@ -426,6 +442,7 @@
 							tokens={token.tokens}
 							{charAnimation}
 							{onSourceClick}
+							{generatedFiles}
 						/>
 					{:else}
 						{unescapeHtml(token.text)}
@@ -437,6 +454,7 @@
 					tokens={token.tokens ?? []}
 					{charAnimation}
 					{onSourceClick}
+					{generatedFiles}
 				/>
 			{:else}
 				{unescapeHtml(token.text)}

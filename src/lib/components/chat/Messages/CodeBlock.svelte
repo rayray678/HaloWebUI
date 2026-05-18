@@ -303,7 +303,7 @@
 			packages: packages
 		});
 
-		setTimeout(() => {
+		const executionTimeout = setTimeout(() => {
 			if (executing) {
 				executing = false;
 				stderr = 'Execution Time Limit Exceeded';
@@ -313,6 +313,7 @@
 
 		pyodideWorker.onmessage = (event) => {
 			const { id, ...data } = event.data;
+			clearTimeout(executionTimeout);
 
 			if (data['stdout']) {
 				stdout = data['stdout'];
@@ -376,10 +377,13 @@
 			data['result'] && (result = data['result']);
 
 			executing = false;
+			pyodideWorker.terminate();
 		};
 
 		pyodideWorker.onerror = () => {
+			clearTimeout(executionTimeout);
 			executing = false;
+			pyodideWorker.terminate();
 		};
 	};
 

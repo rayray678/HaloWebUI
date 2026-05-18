@@ -133,11 +133,17 @@ class NotesTable:
             note = db.get(Note, id)
             if not note:
                 return None
-            note.title = form_data.title
-            note.content = form_data.content
-            note.data = form_data.data
-            note.meta = form_data.meta
-            note.access_control = form_data.access_control
+            update_fields = form_data.model_fields_set
+            if "title" in update_fields:
+                note.title = form_data.title
+            if "content" in update_fields:
+                note.content = form_data.content
+            if "data" in update_fields:
+                note.data = form_data.data
+            if "meta" in update_fields:
+                note.meta = form_data.meta
+            if "access_control" in update_fields:
+                note.access_control = form_data.access_control
             note.updated_at = int(time.time())
             db.commit()
             db.refresh(note)
@@ -175,4 +181,3 @@ class NotesTable:
 
 
 Notes = NotesTable()
-

@@ -2,7 +2,13 @@
 	import { toast } from 'svelte-sonner';
 	import { onMount, onDestroy, getContext } from 'svelte';
 	import { user, models, socket } from '$lib/stores';
-	import { getNotes, createNewNote, updateNoteById, deleteNoteById } from '$lib/apis/notes';
+	import {
+		getNotes,
+		getNoteById,
+		createNewNote,
+		updateNoteById,
+		deleteNoteById
+	} from '$lib/apis/notes';
 	import { generateTitle } from '$lib/apis';
 	import { uploadFile } from '$lib/apis/files';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -24,7 +30,8 @@
 
 	let showEditor = false;
 	let editingNote: any = null;
-	let noteForm = { title: '', content: '' };
+	let noteForm: any = { title: '', content: '' };
+	let openingNoteId = '';
 
 	let showDeleteConfirm = false;
 	let deletingNoteId = '';
@@ -189,11 +196,14 @@
 				const meta = { ...(note.meta || {}), order: newOrder };
 				note.meta = meta;
 				updates.push(
-					updateNoteById(localStorage.token, note.id, {
-						title: note.title,
-						content: note.content,
-						meta
-					})
+					(async () => {
+						const fullNote = await fetchFullNote(note);
+						return updateNoteById(
+							localStorage.token,
+							note.id,
+							buildNoteUpdatePayload(fullNote, { meta })
+						);
+					})()
 				);
 			}
 		}
@@ -238,6 +248,19 @@
 		notes = (await getNotes(localStorage.token)) ?? [];
 	};
 
+	const fetchFullNote = async (note: any) => {
+		if (!note?.id) return note;
+		return (await getNoteById(localStorage.token, note.id)) ?? note;
+	};
+
+	const buildNoteUpdatePayload = (note: any, overrides: any = {}) => ({
+		title: overrides.title ?? note?.title ?? '',
+		content: overrides.content ?? note?.content ?? '',
+		...(note?.data !== undefined ? { data: note.data } : {}),
+		meta: overrides.meta ?? note?.meta ?? {},
+		...(note?.access_control !== undefined ? { access_control: note.access_control } : {})
+	});
+
 	const openCreateModal = () => {
 		editingNote = null;
 		noteForm = { title: '', content: '' };
@@ -245,12 +268,25 @@
 		showEditor = true;
 	};
 
-	const openEditModal = (note: any) => {
-		editingNote = note;
-		noteForm = { title: note.title, content: note.content, meta: note.meta || {} };
-		resetHistory();
-		showEditor = true;
-		joinNoteRoom(note.id);
+	const openEditModal = async (note: any) => {
+		if (openingNoteId) return;
+		openingNoteId = note.id;
+		try {
+			const fullNote = await fetchFullNote(note);
+			editingNote = fullNote;
+			noteForm = {
+				title: fullNote.title ?? '',
+				content: fullNote.content ?? '',
+				meta: fullNote.meta || {}
+			};
+			resetHistory();
+			showEditor = true;
+			joinNoteRoom(fullNote.id);
+		} catch (err) {
+			toast.error(`${err}`);
+		} finally {
+			openingNoteId = '';
+		}
 	};
 
 	const saveNote = async () => {
@@ -261,9 +297,11 @@
 		try {
 			if (editingNote) {
 				await updateNoteById(localStorage.token, editingNote.id, {
-					title: noteForm.title,
-					content: noteForm.content,
-					meta: editingNote.meta || {}
+					...buildNoteUpdatePayload(editingNote, {
+						title: noteForm.title,
+						content: noteForm.content,
+						meta: editingNote.meta || {}
+					})
 				});
 				toast.success($i18n.t('Note updated'));
 			} else {
@@ -330,7 +368,8 @@
 
 	const handleCopyContent = async (note: any) => {
 		try {
-			await navigator.clipboard.writeText(note.content || '');
+			const fullNote = await fetchFullNote(note);
+			await navigator.clipboard.writeText(fullNote.content || '');
 			toast.success($i18n.t('Copied to clipboard'));
 		} catch {
 			toast.error($i18n.t('Failed to copy'));
@@ -518,10 +557,13 @@
 			<div class="flex flex-col gap-3 lg:flex-row lg:items-center">
 				<div class="workspace-toolbar-summary">
 					<div class="workspace-count-pill">
-						{filteredItems.length} {$i18n.t('Notes')}
+						{filteredItems.length}
+						{$i18n.t('Notes')}
 					</div>
 					<div class="text-xs text-gray-500 dark:text-gray-400">
-						{$i18n.t('Capture collaborative notes, drafts, and reference material without leaving the workspace.')}
+						{$i18n.t(
+							'Capture collaborative notes, drafts, and reference material without leaving the workspace.'
+						)}
 					</div>
 				</div>
 				<div class="workspace-toolbar">
@@ -553,98 +595,98 @@
 		</section>
 
 		<section class="workspace-section space-y-2">
-		{#each filteredItems as note, i}
-			<div
-				class="flex justify-between items-start w-full px-3 py-3 my-1 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition group cursor-pointer
+			{#each filteredItems as note, i}
+				<div
+					class="flex justify-between items-start w-full px-3 py-3 my-1 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition group cursor-pointer
 					{dropIndex === i && dragIndex !== null && dragIndex !== i ? 'border-t-2 border-blue-400' : ''}"
-				draggable="true"
-				on:dragstart={() => handleDragStart(i)}
-				on:dragover|preventDefault={() => handleDragOver(i)}
-				on:drop|preventDefault={handleDrop}
-				on:dragend={() => {
-					dragIndex = null;
-					dropIndex = null;
-				}}
-				on:click={() => openEditModal(note)}
-				on:keypress={() => {}}
-				role="button"
-				tabindex="0"
-			>
-				<div class="flex-1 min-w-0">
-					<div class="font-medium text-sm truncate" dir="auto">{note.title}</div>
-					{#if note.content}
-						<div
-							class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5 max-w-[400px]"
-							dir="auto"
-						>
-							{note.content.slice(0, 200)}
+					draggable="true"
+					on:dragstart={() => handleDragStart(i)}
+					on:dragover|preventDefault={() => handleDragOver(i)}
+					on:drop|preventDefault={handleDrop}
+					on:dragend={() => {
+						dragIndex = null;
+						dropIndex = null;
+					}}
+					on:click={() => openEditModal(note)}
+					on:keypress={() => {}}
+					role="button"
+					tabindex="0"
+				>
+					<div class="flex-1 min-w-0">
+						<div class="font-medium text-sm truncate" dir="auto">{note.title}</div>
+						{#if note.content}
+							<div
+								class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5 max-w-[400px]"
+								dir="auto"
+							>
+								{note.content.slice(0, 200)}
+							</div>
+						{/if}
+						<div class="flex items-center gap-2 mt-1">
+							<span class="text-xs text-gray-400 dark:text-gray-500">
+								{formatDate(note.updated_at)}
+							</span>
+							{#if countChecklist(note.content || '')}
+								{@const checks = countChecklist(note.content || '')}
+								<span class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-0.5">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="size-3"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+									{checks.done}/{checks.all}
+								</span>
+							{/if}
 						</div>
-					{/if}
-					<div class="flex items-center gap-2 mt-1">
-						<span class="text-xs text-gray-400 dark:text-gray-500">
-							{formatDate(note.updated_at)}
-						</span>
-						{#if countChecklist(note.content || '')}
-							{@const checks = countChecklist(note.content || '')}
-							<span class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-0.5">
+					</div>
+
+					<div class="flex gap-1 items-center opacity-0 group-hover:opacity-100 transition ml-2">
+						<Tooltip content={$i18n.t('Copy')}>
+							<button
+								class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition"
+								on:click|stopPropagation={() => handleCopyContent(note)}
+							>
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 20 20"
 									fill="currentColor"
-									class="size-3"
+									class="size-4"
 								>
 									<path
-										fill-rule="evenodd"
-										d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
-										clip-rule="evenodd"
+										d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12A1.5 1.5 0 0117 6.622V12.5a1.5 1.5 0 01-1.5 1.5h-1v-3.379a3 3 0 00-.879-2.121L10.5 5.379A3 3 0 008.379 4.5H7v-1z"
+									/>
+									<path
+										d="M4.5 6A1.5 1.5 0 003 7.5v9A1.5 1.5 0 004.5 18h7a1.5 1.5 0 001.5-1.5v-5.879a1.5 1.5 0 00-.44-1.06L9.44 6.439A1.5 1.5 0 008.378 6H4.5z"
 									/>
 								</svg>
-								{checks.done}/{checks.all}
-							</span>
-						{/if}
+							</button>
+						</Tooltip>
+						<Tooltip content={$i18n.t('Delete')}>
+							<button
+								class="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition"
+								on:click|stopPropagation={() => confirmDelete(note.id)}
+							>
+								<GarbageBin className="size-4" />
+							</button>
+						</Tooltip>
 					</div>
 				</div>
-
-				<div class="flex gap-1 items-center opacity-0 group-hover:opacity-100 transition ml-2">
-					<Tooltip content={$i18n.t('Copy')}>
-						<button
-							class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition"
-							on:click|stopPropagation={() => handleCopyContent(note)}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 20 20"
-								fill="currentColor"
-								class="size-4"
-							>
-								<path
-									d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12A1.5 1.5 0 0117 6.622V12.5a1.5 1.5 0 01-1.5 1.5h-1v-3.379a3 3 0 00-.879-2.121L10.5 5.379A3 3 0 008.379 4.5H7v-1z"
-								/>
-								<path
-									d="M4.5 6A1.5 1.5 0 003 7.5v9A1.5 1.5 0 004.5 18h7a1.5 1.5 0 001.5-1.5v-5.879a1.5 1.5 0 00-.44-1.06L9.44 6.439A1.5 1.5 0 008.378 6H4.5z"
-								/>
-							</svg>
-						</button>
-					</Tooltip>
-					<Tooltip content={$i18n.t('Delete')}>
-						<button
-							class="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition"
-							on:click|stopPropagation={() => confirmDelete(note.id)}
-						>
-							<GarbageBin className="size-4" />
-						</button>
-					</Tooltip>
+			{:else}
+				<div class="workspace-empty-state">
+					<p class="text-sm text-gray-500 dark:text-gray-400">
+						{query
+							? $i18n.t('No notes found matching your search')
+							: $i18n.t('No notes yet. Create your first note to get started.')}
+					</p>
 				</div>
-			</div>
-		{:else}
-			<div class="workspace-empty-state">
-				<p class="text-sm text-gray-500 dark:text-gray-400">
-					{query
-						? $i18n.t('No notes found matching your search')
-						: $i18n.t('No notes yet. Create your first note to get started.')}
-				</p>
-			</div>
-		{/each}
+			{/each}
 		</section>
 	</div>
 {:else}

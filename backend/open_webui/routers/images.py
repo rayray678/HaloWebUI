@@ -41,7 +41,10 @@ from open_webui.utils.api_key_pool import (
     normalize_api_key_pool_config,
     should_retry_api_key,
 )
-from open_webui.utils.error_handling import build_error_detail, read_requests_error_payload
+from open_webui.utils.error_handling import (
+    build_error_detail,
+    read_requests_error_payload,
+)
 from open_webui.utils.model_identity import (
     AMBIGUOUS_MODEL_CODE,
     AMBIGUOUS_MODEL_DETAIL,
@@ -70,16 +73,16 @@ IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
 
-COMFYUI_WORKFLOW_NODE_MAPPING_INVALID = (
-    "ComfyUI workflow node mapping is invalid. Please update the workflow node IDs to match the current workflow."
-)
+COMFYUI_WORKFLOW_NODE_MAPPING_INVALID = "ComfyUI workflow node mapping is invalid. Please update the workflow node IDs to match the current workflow."
 
 IMAGE_MODEL_DISCOVERY_CACHE_TTL_SECONDS = 60.0
 IMAGE_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64
 IMAGE_MODEL_DISCOVERY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 OPENAI_IMAGE_BATCH_SPLIT_CONCURRENCY = 2
 MARKDOWN_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
-DATA_IMAGE_URL_RE = re.compile(r"data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+", re.IGNORECASE)
+DATA_IMAGE_URL_RE = re.compile(
+    r"data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+", re.IGNORECASE
+)
 
 OPENAI_IMAGE_DEFAULT_RESPONSE_FORMAT_PREFIXES = (
     "chatgpt-image-",
@@ -119,6 +122,28 @@ OPENAI_DEDICATED_IMAGE_MODEL_RE = re.compile(
     ),
     re.IGNORECASE,
 )
+
+
+class OpenAIImagePartialBatchError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        route_label: str,
+        model_id: str,
+        requested_n: int,
+        images: list[dict[str, Any]],
+        failures: list[dict[str, Any]],
+    ):
+        self.route_label = route_label
+        self.model_id = model_id
+        self.requested_n = requested_n
+        self.images = images
+        self.failures = failures
+        super().__init__(
+            f"Generated {len(images)} of {requested_n} images; {len(failures)} image requests failed."
+        )
+
+
 OPENAI_IMAGE_EDIT_COMPAT_MODEL_RE = re.compile(
     "|".join(
         (
@@ -193,7 +218,9 @@ NEGATIVE_IMAGE_HINTS = (
     "video-generation",
     "video generation",
 )
-NEGATIVE_TOKEN_RE = re.compile(r"(^|[\/._:-])(vision|vl|asr|video)([\/._:-]|$)", re.IGNORECASE)
+NEGATIVE_TOKEN_RE = re.compile(
+    r"(^|[\/._:-])(vision|vl|asr|video)([\/._:-]|$)", re.IGNORECASE
+)
 VERSION_LIKE_BASE_URL_RE = re.compile(
     r"/(?:compatible-mode/)?v\d+(?:[a-z]+\d*)?$", re.IGNORECASE
 )
@@ -271,11 +298,7 @@ def _filter_process_debug_env(env: dict[str, str]) -> dict[str, str]:
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
     )
-    return {
-        key: str(env.get(key) or "")
-        for key in allowed_keys
-        if key in env
-    }
+    return {key: str(env.get(key) or "") for key in allowed_keys if key in env}
 
 
 def _evict_stale_image_models_cache(now: float) -> None:
@@ -287,7 +310,9 @@ def _evict_stale_image_models_cache(now: float) -> None:
     for cache_key in stale_keys:
         IMAGE_MODEL_DISCOVERY_CACHE.pop(cache_key, None)
 
-    overflow = len(IMAGE_MODEL_DISCOVERY_CACHE) - IMAGE_MODEL_DISCOVERY_CACHE_MAX_ENTRIES
+    overflow = (
+        len(IMAGE_MODEL_DISCOVERY_CACHE) - IMAGE_MODEL_DISCOVERY_CACHE_MAX_ENTRIES
+    )
     if overflow <= 0:
         return
 
@@ -307,7 +332,9 @@ def _can_use_image_generation(request: Request, user) -> bool:
         return True
     try:
         return has_permission(
-            user.id, "features.image_generation", request.app.state.config.USER_PERMISSIONS
+            user.id,
+            "features.image_generation",
+            request.app.state.config.USER_PERMISSIONS,
         )
     except Exception:
         return False
@@ -420,7 +447,9 @@ def _extract_comfyui_input_options(input_spec) -> list[dict]:
     return extracted
 
 
-def _get_comfyui_models(info: dict, workflow: dict, workflow_nodes: list[dict]) -> list[dict]:
+def _get_comfyui_models(
+    info: dict, workflow: dict, workflow_nodes: list[dict]
+) -> list[dict]:
     model_node = next(
         (
             node
@@ -562,17 +591,17 @@ def _shared_key_available(request: Request, engine: str) -> bool:
     engine = _normalize_engine(engine)
 
     if engine == "openai":
-        return _is_non_empty(getattr(cfg, "IMAGES_OPENAI_API_BASE_URL", "")) and _is_non_empty(
-            getattr(cfg, "IMAGES_OPENAI_API_KEY", "")
-        )
+        return _is_non_empty(
+            getattr(cfg, "IMAGES_OPENAI_API_BASE_URL", "")
+        ) and _is_non_empty(getattr(cfg, "IMAGES_OPENAI_API_KEY", ""))
     if engine == "gemini":
-        return _is_non_empty(getattr(cfg, "IMAGES_GEMINI_API_BASE_URL", "")) and _is_non_empty(
-            getattr(cfg, "IMAGES_GEMINI_API_KEY", "")
-        )
+        return _is_non_empty(
+            getattr(cfg, "IMAGES_GEMINI_API_BASE_URL", "")
+        ) and _is_non_empty(getattr(cfg, "IMAGES_GEMINI_API_KEY", ""))
     if engine == "grok":
-        return _is_non_empty(getattr(cfg, "IMAGES_GROK_API_BASE_URL", "")) and _is_non_empty(
-            getattr(cfg, "IMAGES_GROK_API_KEY", "")
-        )
+        return _is_non_empty(
+            getattr(cfg, "IMAGES_GROK_API_BASE_URL", "")
+        ) and _is_non_empty(getattr(cfg, "IMAGES_GROK_API_KEY", ""))
     if engine == "comfyui":
         return _is_non_empty(getattr(cfg, "COMFYUI_BASE_URL", ""))
     if engine in ("automatic1111", ""):
@@ -633,27 +662,35 @@ def _sync_image_provider_config_state(request: Request) -> None:
 
     openai_base_url = str(getattr(cfg, "IMAGES_OPENAI_API_BASE_URL", "") or "")
     openai_force_mode = bool(getattr(cfg, "IMAGES_OPENAI_API_FORCE_MODE", False))
-    normalized_openai_base_url, normalized_openai_force_mode = _normalize_image_provider_base_url(
-        openai_base_url,
-        "/v1",
-        force_mode=openai_force_mode,
+    normalized_openai_base_url, normalized_openai_force_mode = (
+        _normalize_image_provider_base_url(
+            openai_base_url,
+            "/v1",
+            force_mode=openai_force_mode,
+        )
     )
     if normalized_openai_base_url != openai_base_url:
         request.app.state.config.IMAGES_OPENAI_API_BASE_URL = normalized_openai_base_url
     if normalized_openai_force_mode != openai_force_mode:
-        request.app.state.config.IMAGES_OPENAI_API_FORCE_MODE = normalized_openai_force_mode
+        request.app.state.config.IMAGES_OPENAI_API_FORCE_MODE = (
+            normalized_openai_force_mode
+        )
 
     gemini_base_url = str(getattr(cfg, "IMAGES_GEMINI_API_BASE_URL", "") or "")
     gemini_force_mode = bool(getattr(cfg, "IMAGES_GEMINI_API_FORCE_MODE", False))
-    normalized_gemini_base_url, normalized_gemini_force_mode = _normalize_image_provider_base_url(
-        gemini_base_url,
-        "/v1beta",
-        force_mode=gemini_force_mode,
+    normalized_gemini_base_url, normalized_gemini_force_mode = (
+        _normalize_image_provider_base_url(
+            gemini_base_url,
+            "/v1beta",
+            force_mode=gemini_force_mode,
+        )
     )
     if normalized_gemini_base_url != gemini_base_url:
         request.app.state.config.IMAGES_GEMINI_API_BASE_URL = normalized_gemini_base_url
     if normalized_gemini_force_mode != gemini_force_mode:
-        request.app.state.config.IMAGES_GEMINI_API_FORCE_MODE = normalized_gemini_force_mode
+        request.app.state.config.IMAGES_GEMINI_API_FORCE_MODE = (
+            normalized_gemini_force_mode
+        )
 
     grok_base_url = str(getattr(cfg, "IMAGES_GROK_API_BASE_URL", "") or "")
     normalized_grok_base_url, _ = _normalize_image_provider_base_url(
@@ -685,12 +722,16 @@ def _model_id_basename(model_id: str) -> str:
 def _strip_connection_model_prefix(model_id: str, api_config: Optional[dict]) -> str:
     normalized_model_id = str(model_id or "").strip()
     cfg = api_config if isinstance(api_config, dict) else {}
-    prefix_id = str(cfg.get("_resolved_prefix_id") or cfg.get("prefix_id") or "").strip()
+    prefix_id = str(
+        cfg.get("_resolved_prefix_id") or cfg.get("prefix_id") or ""
+    ).strip()
     if prefix_id:
         prefix = f"{prefix_id}."
         if normalized_model_id.startswith(prefix):
             return normalized_model_id[len(prefix) :]
-    fallback_match = re.match(r"^[0-9a-f]{8}\.(.+)$", normalized_model_id, re.IGNORECASE)
+    fallback_match = re.match(
+        r"^[0-9a-f]{8}\.(.+)$", normalized_model_id, re.IGNORECASE
+    )
     if fallback_match:
         return fallback_match.group(1)
 
@@ -774,9 +815,13 @@ def _extract_modalities(model: dict) -> tuple[set[str], set[str]]:
         if not isinstance(container, dict):
             continue
         if "input_modalities" in container:
-            input_modalities.update(_collect_modality_tokens(container.get("input_modalities")))
+            input_modalities.update(
+                _collect_modality_tokens(container.get("input_modalities"))
+            )
         if "inputModalities" in container:
-            input_modalities.update(_collect_modality_tokens(container.get("inputModalities")))
+            input_modalities.update(
+                _collect_modality_tokens(container.get("inputModalities"))
+            )
         if "output_modalities" in container:
             output_modalities.update(
                 _collect_modality_tokens(container.get("output_modalities"))
@@ -810,9 +855,11 @@ def _extract_endpoint_blob(model: dict) -> str:
         model.get("supported_endpoint_types"),
         model.get("endpoint_type"),
         model.get("api"),
-        model.get("architecture", {}).get("endpoints")
-        if isinstance(model.get("architecture"), dict)
-        else None,
+        (
+            model.get("architecture", {}).get("endpoints")
+            if isinstance(model.get("architecture"), dict)
+            else None
+        ),
     ]
     parts = [_json_blob(candidate) for candidate in candidates if candidate]
     return "\n".join(part for part in parts if part)
@@ -856,9 +903,7 @@ def _endpoint_blob_has_video_route(endpoint_blob: str) -> bool:
     )
 
 
-def _resolve_default_openai_image_route(
-    routes: set[str], generation_mode: str
-) -> str:
+def _resolve_default_openai_image_route(routes: set[str], generation_mode: str) -> str:
     if generation_mode == "openai_chat_image":
         if OPENAI_IMAGE_ROUTE_CHAT in routes:
             return OPENAI_IMAGE_ROUTE_CHAT
@@ -1100,7 +1145,9 @@ def _match_global_provider_connection(
 def _get_image_source_connection_key(provider: str, source: dict[str, Any]) -> str:
     api_config = source.get("api_config") if isinstance(source, dict) else {}
     api_config = api_config if isinstance(api_config, dict) else {}
-    prefix = str(api_config.get("_resolved_prefix_id") or api_config.get("prefix_id") or "").strip()
+    prefix = str(
+        api_config.get("_resolved_prefix_id") or api_config.get("prefix_id") or ""
+    ).strip()
     if prefix:
         return prefix
     if source.get("connection_index") is not None:
@@ -1128,9 +1175,7 @@ def _normalize_image_source_api_key_pool(
     return normalized_source
 
 
-def _get_image_source_key_attempts(
-    provider: str, source: dict[str, Any]
-) -> list:
+def _get_image_source_key_attempts(provider: str, source: dict[str, Any]) -> list:
     normalized_source = _normalize_image_source_api_key_pool(provider, source)
     api_config = normalized_source.get("api_config") or {}
     return get_api_key_attempts(
@@ -1275,8 +1320,8 @@ def _list_image_provider_sources(
     else:
         return []
 
-    shared_global_index, shared_global_key, shared_api_config = _match_global_provider_connection(
-        request, provider, shared_base_url
+    shared_global_index, shared_global_key, shared_api_config = (
+        _match_global_provider_connection(request, provider, shared_base_url)
     )
 
     def _build_shared_source(
@@ -1287,7 +1332,11 @@ def _list_image_provider_sources(
 
         resolved_key = shared_key
         resolved_api_config = dict(image_api_config)
-        if (for_settings or fallback_to_global_key) and not resolved_key and shared_global_key:
+        if (
+            (for_settings or fallback_to_global_key)
+            and not resolved_key
+            and shared_global_key
+        ):
             resolved_key = shared_global_key
             if isinstance(shared_api_config, dict):
                 resolved_api_config = {**shared_api_config, **resolved_api_config}
@@ -1313,7 +1362,9 @@ def _list_image_provider_sources(
         return _normalize_image_source_api_key_pool(provider, source)
 
     if context == "settings":
-        settings_source = _build_shared_source(for_settings=True, fallback_to_global_key=True)
+        settings_source = _build_shared_source(
+            for_settings=True, fallback_to_global_key=True
+        )
         return [settings_source] if settings_source is not None else []
 
     personal_urls, personal_keys, personal_cfgs = _get_provider_user_connection_bundle(
@@ -1326,7 +1377,9 @@ def _list_image_provider_sources(
         preferred_index: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         chosen = (
-            _get_personal_connection_exact(personal_urls, personal_keys, preferred_index)
+            _get_personal_connection_exact(
+                personal_urls, personal_keys, preferred_index
+            )
             if preferred_index is not None
             else _pick_personal_connection(personal_urls, personal_keys)
         )
@@ -1350,7 +1403,9 @@ def _list_image_provider_sources(
 
     def _list_personal_sources() -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []
-        for idx, _base_url, _api_key in _list_personal_connections(personal_urls, personal_keys):
+        for idx, _base_url, _api_key in _list_personal_connections(
+            personal_urls, personal_keys
+        ):
             source = _resolve_personal_source(idx)
             if source is not None:
                 sources.append(source)
@@ -1397,13 +1452,19 @@ def _list_image_provider_sources(
                 *[
                     source
                     for source in personal_sources
-                    if source.get("connection_index") != preferred.get("connection_index")
+                    if source.get("connection_index")
+                    != preferred.get("connection_index")
                 ],
             ]
 
     shared_source = _build_shared_source()
     sources: list[dict[str, Any]] = []
-    if prefer_shared and shared_enabled and shared_available and shared_source is not None:
+    if (
+        prefer_shared
+        and shared_enabled
+        and shared_available
+        and shared_source is not None
+    ):
         sources.append(shared_source)
     sources.extend(personal_sources)
     if (
@@ -1462,7 +1523,9 @@ def _get_cached_image_models(cache_key: str) -> Optional[list[dict[str, Any]]]:
     return list(models)
 
 
-def _set_cached_image_models(cache_key: str, models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _set_cached_image_models(
+    cache_key: str, models: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     now = time.monotonic()
     IMAGE_MODEL_DISCOVERY_CACHE[cache_key] = (now, list(models))
     _evict_stale_image_models_cache(now)
@@ -1477,7 +1540,9 @@ def _build_image_model_selection_key(
         return normalized_model_id
 
     base_url = str(source.get("base_url") or "").strip()
-    base_hash = hashlib.sha1(base_url.encode("utf-8")).hexdigest()[:12] if base_url else ""
+    base_hash = (
+        hashlib.sha1(base_url.encode("utf-8")).hexdigest()[:12] if base_url else ""
+    )
     provider = str(source.get("provider") or "").strip()
     effective_source = str(source.get("effective_source") or "").strip()
     connection_index = source.get("connection_index")
@@ -1529,7 +1594,9 @@ def _image_source_matches_selection_hint(
         return False
 
     base_url = str(source.get("base_url") or "").strip()
-    base_hash = hashlib.sha1(base_url.encode("utf-8")).hexdigest()[:12] if base_url else ""
+    base_hash = (
+        hashlib.sha1(base_url.encode("utf-8")).hexdigest()[:12] if base_url else ""
+    )
     source_connection_index = source.get("connection_index")
     normalized_source_connection_index = (
         str(source_connection_index).strip()
@@ -1538,17 +1605,15 @@ def _image_source_matches_selection_hint(
     )
     hint_connection_index = hint.get("connection_index")
     normalized_hint_connection_index = (
-        str(hint_connection_index).strip()
-        if hint_connection_index is not None
-        else ""
+        str(hint_connection_index).strip() if hint_connection_index is not None else ""
     )
 
     return (
-        str(source.get("provider") or "").strip() == str(hint.get("provider") or "").strip()
+        str(source.get("provider") or "").strip()
+        == str(hint.get("provider") or "").strip()
         and str(source.get("effective_source") or "").strip()
         == str(hint.get("effective_source") or "").strip()
-        and normalized_source_connection_index
-        == normalized_hint_connection_index
+        and normalized_source_connection_index == normalized_hint_connection_index
         and base_hash == str(hint.get("base_hash") or "").strip()
     )
 
@@ -1580,7 +1645,11 @@ def _image_source_matches_model_ref(
     ).strip()
     if connection_id:
         has_precise_ref = True
-        api_config = source.get("api_config") if isinstance(source.get("api_config"), dict) else {}
+        api_config = (
+            source.get("api_config")
+            if isinstance(source.get("api_config"), dict)
+            else {}
+        )
         source_connection_id = str(
             source.get("connection_id")
             or api_config.get("_resolved_prefix_id")
@@ -1590,9 +1659,11 @@ def _image_source_matches_model_ref(
         if source_connection_id != connection_id:
             return False
 
-    effective_source = str(
-        model_ref.get("source") or model_ref.get("effective_source") or ""
-    ).strip().lower()
+    effective_source = (
+        str(model_ref.get("source") or model_ref.get("effective_source") or "")
+        .strip()
+        .lower()
+    )
     if effective_source in {"shared", "settings"}:
         return True
 
@@ -1612,12 +1683,15 @@ def _image_source_scope_matches_model_ref(
     ):
         return False
 
-    effective_source = str(
-        model_ref.get("source") or model_ref.get("effective_source") or ""
-    ).strip().lower()
+    effective_source = (
+        str(model_ref.get("source") or model_ref.get("effective_source") or "")
+        .strip()
+        .lower()
+    )
     if (
         effective_source
-        and effective_source != str(source.get("effective_source") or "").strip().lower()
+        and effective_source
+        != str(source.get("effective_source") or "").strip().lower()
     ):
         return False
 
@@ -1699,15 +1773,23 @@ def _build_image_model_entry(
     reference_image_default_route: Optional[str] = None,
 ) -> dict[str, Any]:
     provider = source.get("provider") if isinstance(source, dict) else None
-    effective_source = source.get("effective_source") if isinstance(source, dict) else None
-    connection_index = source.get("connection_index") if isinstance(source, dict) else None
+    effective_source = (
+        source.get("effective_source") if isinstance(source, dict) else None
+    )
+    connection_index = (
+        source.get("connection_index") if isinstance(source, dict) else None
+    )
     api_config = source.get("api_config") if isinstance(source, dict) else {}
-    connection_id = str(
-        source.get("connection_id")
-        or (api_config or {}).get("_resolved_prefix_id")
-        or (api_config or {}).get("prefix_id")
-        or ""
-    ).strip() if isinstance(source, dict) else ""
+    connection_id = (
+        str(
+            source.get("connection_id")
+            or (api_config or {}).get("_resolved_prefix_id")
+            or (api_config or {}).get("prefix_id")
+            or ""
+        ).strip()
+        if isinstance(source, dict)
+        else ""
+    )
     model_ref = (
         build_model_ref(
             provider=str(provider or ""),
@@ -1738,7 +1820,8 @@ def _build_image_model_entry(
     normalized_routes = [
         route
         for route in route_order
-        if route in {str(value or "").strip() for value in (supported_image_routes or [])}
+        if route
+        in {str(value or "").strip() for value in (supported_image_routes or [])}
     ]
     if not normalized_routes:
         if generation_mode == "openai_chat_image":
@@ -1752,7 +1835,9 @@ def _build_image_model_entry(
         and OPENAI_IMAGE_ROUTE_CHAT not in normalized_routes
         and _should_offer_openai_chat_image_route(
             base_name=_model_id_basename(model_id).lower(),
-            base_url=str(source.get("base_url") or "") if isinstance(source, dict) else "",
+            base_url=(
+                str(source.get("base_url") or "") if isinstance(source, dict) else ""
+            ),
             generation_mode=generation_mode,
             endpoint_routes=set(normalized_routes),
         )
@@ -1782,7 +1867,9 @@ def _build_image_model_entry(
             ),
             "",
         )
-    normalized_reference_default_route = str(reference_image_default_route or "").strip()
+    normalized_reference_default_route = str(
+        reference_image_default_route or ""
+    ).strip()
     if normalized_reference_default_route not in normalized_routes:
         normalized_reference_default_route = ""
     if (
@@ -1794,7 +1881,11 @@ def _build_image_model_entry(
         )
     ):
         normalized_reference_default_route = OPENAI_IMAGE_ROUTE_EDITS
-    if model_ref and generation_mode in {"openai_images", "openai_chat_image", "xai_images"}:
+    if model_ref and generation_mode in {
+        "openai_images",
+        "openai_chat_image",
+        "xai_images",
+    }:
         model_ref = {
             **model_ref,
             "image_generation_mode": generation_mode,
@@ -1813,11 +1904,7 @@ def _build_image_model_entry(
         "legacy_ids": unique_strings(
             [
                 model_id,
-                (
-                    f"{connection_id}.{model_id}"
-                    if connection_id
-                    else ""
-                ),
+                (f"{connection_id}.{model_id}" if connection_id else ""),
             ]
         ),
         "provider": source.get("provider") if isinstance(source, dict) else None,
@@ -1833,9 +1920,15 @@ def _build_image_model_entry(
         "reference_image_default_route": normalized_reference_default_route,
         "text_output_supported": bool(text_output_supported),
         "source": source.get("effective_source") if isinstance(source, dict) else None,
-        "connection_index": source.get("connection_index") if isinstance(source, dict) else None,
-        "connection_name": source.get("connection_name") if isinstance(source, dict) else None,
-        "connection_icon": source.get("connection_icon") if isinstance(source, dict) else None,
+        "connection_index": (
+            source.get("connection_index") if isinstance(source, dict) else None
+        ),
+        "connection_name": (
+            source.get("connection_name") if isinstance(source, dict) else None
+        ),
+        "connection_icon": (
+            source.get("connection_icon") if isinstance(source, dict) else None
+        ),
     }
 
 
@@ -1867,15 +1960,17 @@ def _classify_openai_image_model(
     ):
         return None
 
-    negative_hint = _matches_image_negative_hint(base_name) or _matches_image_negative_hint(
-        text_blob
-    )
+    negative_hint = _matches_image_negative_hint(
+        base_name
+    ) or _matches_image_negative_hint(text_blob)
     gemini_image_name_hint = _looks_like_gemini_image_model(
         base_name
     ) and not _matches_image_negative_hint(base_name)
-    positive_hint = _matches_image_positive_hint(base_name) or _matches_image_positive_hint(
-        text_blob
-    ) or gemini_image_name_hint
+    positive_hint = (
+        _matches_image_positive_hint(base_name)
+        or _matches_image_positive_hint(text_blob)
+        or gemini_image_name_hint
+    )
     images_endpoint_hint = OPENAI_IMAGE_ROUTE_GENERATIONS in endpoint_routes
     edits_endpoint_hint = OPENAI_IMAGE_ROUTE_EDITS in endpoint_routes
     chat_endpoint_hint = bool(
@@ -1885,8 +1980,11 @@ def _classify_openai_image_model(
             OPENAI_IMAGE_ROUTE_RESPONSES,
         }
     )
-    prefers_volcengine_images_endpoint = _is_volcengine_ark_connection(base_url) and any(
-        hint in base_name or hint in text_blob for hint in VOLCENGINE_IMAGES_ENDPOINT_HINTS
+    prefers_volcengine_images_endpoint = _is_volcengine_ark_connection(
+        base_url
+    ) and any(
+        hint in base_name or hint in text_blob
+        for hint in VOLCENGINE_IMAGES_ENDPOINT_HINTS
     )
     image_model_signal = (
         output_has_image
@@ -1903,7 +2001,11 @@ def _classify_openai_image_model(
         return None
 
     is_dedicated_image_model = _is_openai_dedicated_image_model(base_name, text_blob)
-    if images_endpoint_hint or edits_endpoint_hint or prefers_volcengine_images_endpoint:
+    if (
+        images_endpoint_hint
+        or edits_endpoint_hint
+        or prefers_volcengine_images_endpoint
+    ):
         generation_mode = "openai_images"
         detection_method = (
             "metadata"
@@ -1967,9 +2069,7 @@ def _classify_openai_image_model(
         supports_batch=generation_mode == "openai_images",
         size_mode="exact" if generation_mode == "openai_images" else "aspect_ratio",
         supports_resolution=False,
-        text_output_supported=(
-            output_has_text and not is_dedicated_image_model
-        )
+        text_output_supported=(output_has_text and not is_dedicated_image_model)
         or generation_mode == "openai_chat_image",
         source=source,
         supported_image_routes=supported_image_routes,
@@ -1982,7 +2082,9 @@ def _classify_gemini_image_model(
     *,
     source: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    model_id = str(model.get("id") or model.get("name") or "").replace("models/", "").strip()
+    model_id = (
+        str(model.get("id") or model.get("name") or "").replace("models/", "").strip()
+    )
     if not model_id:
         return None
 
@@ -1993,16 +2095,20 @@ def _classify_gemini_image_model(
     output_has_image = _has_image_modality(output_modalities)
     output_has_text = _has_text_modality(output_modalities)
 
-    negative_hint = _matches_image_negative_hint(base_name) or _matches_image_negative_hint(
-        text_blob
-    )
+    negative_hint = _matches_image_negative_hint(
+        base_name
+    ) or _matches_image_negative_hint(text_blob)
     gemini_image_name_hint = _looks_like_gemini_image_model(
         base_name
     ) and not _matches_image_negative_hint(base_name)
-    positive_hint = _matches_image_positive_hint(base_name) or _matches_image_positive_hint(
-        text_blob
-    ) or gemini_image_name_hint
-    has_predict = any("predict" == method or method.endswith(":predict") for method in methods)
+    positive_hint = (
+        _matches_image_positive_hint(base_name)
+        or _matches_image_positive_hint(text_blob)
+        or gemini_image_name_hint
+    )
+    has_predict = any(
+        "predict" == method or method.endswith(":predict") for method in methods
+    )
     has_generate_content = any("generatecontent" in method for method in methods)
     looks_like_imagen = "imagen" in base_name
     supports_image_size = base_name.startswith("gemini-3")
@@ -2015,7 +2121,9 @@ def _classify_gemini_image_model(
     ):
         return _build_image_model_entry(
             model_id=model_id,
-            name=str(model.get("displayName") or model.get("display_name") or model_id).strip(),
+            name=str(
+                model.get("displayName") or model.get("display_name") or model_id
+            ).strip(),
             generation_mode="gemini_predict",
             detection_method="metadata",
             supports_background=False,
@@ -2031,7 +2139,9 @@ def _classify_gemini_image_model(
     if output_has_image:
         return _build_image_model_entry(
             model_id=model_id,
-            name=str(model.get("displayName") or model.get("display_name") or model_id).strip(),
+            name=str(
+                model.get("displayName") or model.get("display_name") or model_id
+            ).strip(),
             generation_mode="gemini_generate_content_image",
             detection_method="metadata",
             supports_background=False,
@@ -2045,7 +2155,9 @@ def _classify_gemini_image_model(
     if has_generate_content and (positive_hint or output_has_image):
         return _build_image_model_entry(
             model_id=model_id,
-            name=str(model.get("displayName") or model.get("display_name") or model_id).strip(),
+            name=str(
+                model.get("displayName") or model.get("display_name") or model_id
+            ).strip(),
             generation_mode="gemini_generate_content_image",
             detection_method="metadata" if output_has_image else "heuristic",
             supports_background=False,
@@ -2098,7 +2210,11 @@ def _classify_grok_image_model(
 
 def _get_raw_model_id_for_image_search(engine: str, model: dict) -> str:
     if engine == "gemini":
-        return str(model.get("id") or model.get("name") or "").replace("models/", "").strip()
+        return (
+            str(model.get("id") or model.get("name") or "")
+            .replace("models/", "")
+            .strip()
+        )
     return str(
         model.get("id")
         or model.get("name")
@@ -2108,9 +2224,13 @@ def _get_raw_model_id_for_image_search(engine: str, model: dict) -> str:
     ).strip()
 
 
-def _get_raw_model_name_for_image_search(engine: str, model: dict, model_id: str) -> str:
+def _get_raw_model_name_for_image_search(
+    engine: str, model: dict, model_id: str
+) -> str:
     if engine == "gemini":
-        return str(model.get("displayName") or model.get("display_name") or model_id).strip()
+        return str(
+            model.get("displayName") or model.get("display_name") or model_id
+        ).strip()
     return str(
         model.get("name")
         or model.get("displayName")
@@ -2173,7 +2293,9 @@ def _build_image_model_search_candidate(
             supports_background=False,
             supports_batch=False,
             size_mode="aspect_ratio",
-            supports_image_size=_model_id_basename(model_id).lower().startswith("gemini-3"),
+            supports_image_size=_model_id_basename(model_id)
+            .lower()
+            .startswith("gemini-3"),
             text_output_supported=True,
             source=source,
         )
@@ -2225,7 +2347,9 @@ def _build_image_model_search_candidate(
     return entry
 
 
-def _merge_image_model_lists(*model_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _merge_image_model_lists(
+    *model_lists: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for models in model_lists:
@@ -2301,7 +2425,9 @@ def _build_search_candidate_model_meta_from_ref(
         "reference_image_default_route": str(
             model_ref.get("reference_image_default_route") or ""
         ).strip(),
-        "text_output_supported": _model_ref_bool(model_ref.get("text_output_supported")),
+        "text_output_supported": _model_ref_bool(
+            model_ref.get("text_output_supported")
+        ),
     }
 
 
@@ -2334,12 +2460,18 @@ def _resolve_openai_image_request_route(
     has_reference_image: bool = False,
 ) -> str:
     requested_route = _normalize_openai_image_route_mode(route_mode)
-    if str((selected_model_meta or {}).get("generation_mode") or "").strip() == "openai_chat_image":
+    if (
+        str((selected_model_meta or {}).get("generation_mode") or "").strip()
+        == "openai_chat_image"
+    ):
         supported_routes = _model_ref_string_list(
             (selected_model_meta or {}).get("supported_image_routes")
         )
         if requested_route == OPENAI_IMAGE_ROUTE_RESPONSES:
-            if supported_routes and OPENAI_IMAGE_ROUTE_RESPONSES not in supported_routes:
+            if (
+                supported_routes
+                and OPENAI_IMAGE_ROUTE_RESPONSES not in supported_routes
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -2361,10 +2493,15 @@ def _resolve_openai_image_request_route(
                     "当前模型不支持所选图片接口模式。请切换接口模式，或换用支持该模式的图片模型。"
                 ),
             )
-        default_route = str((selected_model_meta or {}).get("default_image_route") or "").strip()
+        default_route = str(
+            (selected_model_meta or {}).get("default_image_route") or ""
+        ).strip()
         if default_route == OPENAI_IMAGE_ROUTE_RESPONSES:
             return OPENAI_IMAGE_ROUTE_RESPONSES
-        if OPENAI_IMAGE_ROUTE_CHAT not in supported_routes and OPENAI_IMAGE_ROUTE_RESPONSES in supported_routes:
+        if (
+            OPENAI_IMAGE_ROUTE_CHAT not in supported_routes
+            and OPENAI_IMAGE_ROUTE_RESPONSES in supported_routes
+        ):
             return OPENAI_IMAGE_ROUTE_RESPONSES
         if supported_routes and OPENAI_IMAGE_ROUTE_CHAT not in supported_routes:
             raise HTTPException(
@@ -2379,7 +2516,9 @@ def _resolve_openai_image_request_route(
         (selected_model_meta or {}).get("supported_image_routes")
     )
     if not supported_routes:
-        generation_mode = str((selected_model_meta or {}).get("generation_mode") or "").strip()
+        generation_mode = str(
+            (selected_model_meta or {}).get("generation_mode") or ""
+        ).strip()
         supported_routes = (
             [OPENAI_IMAGE_ROUTE_CHAT]
             if generation_mode == "openai_chat_image"
@@ -2387,7 +2526,9 @@ def _resolve_openai_image_request_route(
         )
 
     if requested_route == OPENAI_IMAGE_ROUTE_AUTO:
-        default_route = str((selected_model_meta or {}).get("default_image_route") or "").strip()
+        default_route = str(
+            (selected_model_meta or {}).get("default_image_route") or ""
+        ).strip()
         if has_reference_image:
             reference_default_route = str(
                 (selected_model_meta or {}).get("reference_image_default_route") or ""
@@ -2480,7 +2621,8 @@ async def _discover_openai_image_models(
     raw_models: list[dict[str, Any]] = []
     if model_ids:
         raw_models = [
-            {"id": model_id, "name": model_id, "object": "model"} for model_id in model_ids
+            {"id": model_id, "name": model_id, "object": "model"}
+            for model_id in model_ids
         ]
     else:
         models_url = openai_router._get_openai_models_url(base_url, api_config)
@@ -2490,7 +2632,9 @@ async def _discover_openai_image_models(
             trust_env=True,
         ) as session:
             for attempt_idx, attempt in enumerate(key_attempts):
-                headers = _build_openai_image_headers(base_url, attempt.key, api_config, user)
+                headers = _build_openai_image_headers(
+                    base_url, attempt.key, api_config, user
+                )
                 try:
                     async with session.get(
                         models_url,
@@ -2503,7 +2647,9 @@ async def _discover_openai_image_models(
                                 response.status, body
                             ):
                                 return []
-                            if attempt_idx + 1 < len(key_attempts) and should_retry_api_key(
+                            if attempt_idx + 1 < len(
+                                key_attempts
+                            ) and should_retry_api_key(
                                 api_config,
                                 status_code=response.status,
                                 body=body,
@@ -2634,7 +2780,9 @@ async def _discover_gemini_image_models(
             for model_id in model_ids
         ]
     else:
-        response = await gemini_router.send_get_request(f"{base_url}/models", api_key, api_config)
+        response = await gemini_router.send_get_request(
+            f"{base_url}/models", api_key, api_config
+        )
         if not response:
             return []
         if response.get("error"):
@@ -2685,7 +2833,10 @@ async def _list_raw_image_models_for_source(
                 }
                 for model_id in model_ids
             ]
-        return [{"id": model_id, "name": model_id, "object": "model"} for model_id in model_ids]
+        return [
+            {"id": model_id, "name": model_id, "object": "model"}
+            for model_id in model_ids
+        ]
 
     if engine == "openai":
         models_url = openai_router._get_openai_models_url(base_url, api_config)
@@ -2722,7 +2873,9 @@ async def _list_raw_image_models_for_source(
         return normalized.get("data", []) or []
 
     if engine == "gemini":
-        response = await gemini_router.send_get_request(f"{base_url}/models", api_key, api_config)
+        response = await gemini_router.send_get_request(
+            f"{base_url}/models", api_key, api_config
+        )
         if not response:
             return []
         if response.get("error"):
@@ -2994,7 +3147,9 @@ async def _discover_image_models(
     connection_index: Optional[int] = None,
     strict: bool = False,
 ) -> list[dict[str, Any]]:
-    engine = _normalize_engine(getattr(request.app.state.config, "IMAGE_GENERATION_ENGINE", ""))
+    engine = _normalize_engine(
+        getattr(request.app.state.config, "IMAGE_GENERATION_ENGINE", "")
+    )
     if engine not in {"openai", "gemini", "grok"}:
         return await _discover_image_models_for_source(request, user, engine, None)
 
@@ -3113,7 +3268,9 @@ async def _discover_image_model_search_candidates(
     if not query:
         return []
 
-    engine = _normalize_engine(getattr(request.app.state.config, "IMAGE_GENERATION_ENGINE", ""))
+    engine = _normalize_engine(
+        getattr(request.app.state.config, "IMAGE_GENERATION_ENGINE", "")
+    )
     if engine not in {"openai", "gemini", "grok"}:
         return []
 
@@ -3308,7 +3465,9 @@ async def _select_runtime_image_provider_source(
     return candidate_sources[0], None
 
 
-def _apply_image_model_regex_filter(request: Request, models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _apply_image_model_regex_filter(
+    request: Request, models: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     regex = request.app.state.config.IMAGE_MODEL_FILTER_REGEX
     if not regex or not models:
         return models
@@ -3447,9 +3606,11 @@ async def update_config(
         )
         if openai_base_url_set or openai_force_mode_set:
             openai_base_url, openai_force_mode = _normalize_image_provider_base_url(
-                form_data.openai.OPENAI_API_BASE_URL
-                if openai_base_url_set
-                else request.app.state.config.IMAGES_OPENAI_API_BASE_URL,
+                (
+                    form_data.openai.OPENAI_API_BASE_URL
+                    if openai_base_url_set
+                    else request.app.state.config.IMAGES_OPENAI_API_BASE_URL
+                ),
                 "/v1",
                 force_mode=(
                     form_data.openai.OPENAI_API_FORCE_MODE
@@ -3478,9 +3639,11 @@ async def update_config(
         )
         if gemini_base_url_set or gemini_force_mode_set:
             gemini_base_url, gemini_force_mode = _normalize_image_provider_base_url(
-                form_data.gemini.GEMINI_API_BASE_URL
-                if gemini_base_url_set
-                else request.app.state.config.IMAGES_GEMINI_API_BASE_URL,
+                (
+                    form_data.gemini.GEMINI_API_BASE_URL
+                    if gemini_base_url_set
+                    else request.app.state.config.IMAGES_GEMINI_API_BASE_URL
+                ),
                 "/v1beta",
                 force_mode=(
                     form_data.gemini.GEMINI_API_FORCE_MODE
@@ -3673,7 +3836,9 @@ async def get_usage_config(request: Request, user=Depends(get_verified_user)):
     cfg = request.app.state.config
     engine = _normalize_engine(getattr(cfg, "IMAGE_GENERATION_ENGINE", ""))
     shared_enabled = bool(getattr(cfg, "ENABLE_IMAGE_GENERATION_SHARED_KEY", False))
-    shared_available = _shared_key_available(request, engine) if shared_enabled else False
+    shared_available = (
+        _shared_key_available(request, engine) if shared_enabled else False
+    )
 
     personal_supported = engine in ("openai", "gemini", "grok")
     provider = engine if personal_supported else None
@@ -3737,9 +3902,13 @@ async def update_image_config(
             except re.error:
                 raise HTTPException(
                     status_code=400,
-                    detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (invalid regex pattern)."),
+                    detail=ERROR_MESSAGES.INCORRECT_FORMAT(
+                        "  (invalid regex pattern)."
+                    ),
                 )
-        request.app.state.config.IMAGE_MODEL_FILTER_REGEX = form_data.IMAGE_MODEL_FILTER_REGEX
+        request.app.state.config.IMAGE_MODEL_FILTER_REGEX = (
+            form_data.IMAGE_MODEL_FILTER_REGEX
+        )
 
     return {
         "IMAGE_MODEL_FILTER_REGEX": request.app.state.config.IMAGE_MODEL_FILTER_REGEX,
@@ -3826,7 +3995,9 @@ def load_b64_image_data(b64_str):
         return None
 
 
-def _normalize_url_origin(url: Optional[str]) -> Optional[tuple[str, str, Optional[int]]]:
+def _normalize_url_origin(
+    url: Optional[str],
+) -> Optional[tuple[str, str, Optional[int]]]:
     try:
         from urllib.parse import urlparse
 
@@ -3863,7 +4034,9 @@ def _is_allowed_internal_url(
     return False
 
 
-def load_url_image_data(url, headers=None, allowed_base_urls: Optional[list[str]] = None):
+def load_url_image_data(
+    url, headers=None, allowed_base_urls: Optional[list[str]] = None
+):
     try:
         # Basic SSRF protection: reject private/internal URLs
         from urllib.parse import urlparse
@@ -3873,12 +4046,9 @@ def load_url_image_data(url, headers=None, allowed_base_urls: Optional[list[str]
         hostname = parsed.hostname or ""
         allow_internal = _is_allowed_internal_url(url, allowed_base_urls)
 
-        if (
-            not allow_internal
-            and (
-                hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-                or hostname.endswith(".local")
-            )
+        if not allow_internal and (
+            hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+            or hostname.endswith(".local")
         ):
             log.warning(f"Blocked SSRF attempt to internal URL: {hostname}")
             return None
@@ -4191,7 +4361,9 @@ def _extract_generated_image_payload(
     source = item.get("source")
     if isinstance(source, dict):
         source_value = source.get("data") or source.get("base64") or source.get("url")
-        source_mime = source.get("media_type") or source.get("mime_type") or mime_type_hint
+        source_mime = (
+            source.get("media_type") or source.get("mime_type") or mime_type_hint
+        )
         loaded = _load_generated_image_from_value(
             source_value,
             headers=headers,
@@ -4300,7 +4472,9 @@ def _extract_generated_images_from_openai_response(
     return images
 
 
-def _extract_generated_images_from_gemini_response(body: Any) -> list[tuple[bytes, str]]:
+def _extract_generated_images_from_gemini_response(
+    body: Any,
+) -> list[tuple[bytes, str]]:
     images: list[tuple[bytes, str]] = []
 
     predictions = body.get("predictions", []) if isinstance(body, dict) else []
@@ -4314,9 +4488,14 @@ def _extract_generated_images_from_gemini_response(body: Any) -> list[tuple[byte
     if isinstance(candidates, list):
         for candidate in candidates:
             try:
-                _text, candidate_images, _grounding, _thinking, _tool_calls, _next_index = (
-                    gemini_router._extract_content_segments(candidate)
-                )
+                (
+                    _text,
+                    candidate_images,
+                    _grounding,
+                    _thinking,
+                    _tool_calls,
+                    _next_index,
+                ) = gemini_router._extract_content_segments(candidate)
             except Exception:
                 candidate_images = []
 
@@ -4342,7 +4521,9 @@ def _get_openai_images_generation_url(base_url: str, api_config: Optional[dict])
         if normalized_url.endswith(suffix):
             normalized_url = normalized_url[: -len(suffix)]
 
-    is_azure = bool((api_config or {}).get("azure")) or "openai.azure.com" in normalized_url
+    is_azure = (
+        bool((api_config or {}).get("azure")) or "openai.azure.com" in normalized_url
+    )
     if is_azure:
         api_version = str((api_config or {}).get("api_version") or "2024-02-01")
         return f"{normalized_url}/images/generations?api-version={api_version}"
@@ -4447,9 +4628,7 @@ def _parse_openai_image_stream_response(stream_text: str) -> dict[str, Any]:
             if key in seen:
                 continue
             seen.add(key)
-            images.append(
-                {"b64_json": base64.b64encode(image_bytes).decode("utf-8")}
-            )
+            images.append({"b64_json": base64.b64encode(image_bytes).decode("utf-8")})
 
     body: dict[str, Any] = {"data": images}
     if usage is not None:
@@ -4457,7 +4636,9 @@ def _parse_openai_image_stream_response(stream_text: str) -> dict[str, Any]:
     return body
 
 
-def _build_openai_image_usage(body: Any, elapsed_ms: Optional[int]) -> Optional[dict[str, Any]]:
+def _build_openai_image_usage(
+    body: Any, elapsed_ms: Optional[int]
+) -> Optional[dict[str, Any]]:
     upstream_usage = body.get("usage") if isinstance(body, dict) else None
     usage = dict(upstream_usage) if isinstance(upstream_usage, dict) else {}
 
@@ -4495,7 +4676,9 @@ async def _send_openai_image_request(
         for key, value in (form_fields or {}).items():
             if value is None:
                 continue
-            request_data[key] = str(value).lower() if isinstance(value, bool) else str(value)
+            request_data[key] = (
+                str(value).lower() if isinstance(value, bool) else str(value)
+            )
         request_files = []
         for file_item in files or []:
             request_files.append(
@@ -4513,7 +4696,9 @@ async def _send_openai_image_request(
 
     started_at = time.monotonic()
     try:
-        timeout = None if AIOHTTP_CLIENT_TIMEOUT is None else float(AIOHTTP_CLIENT_TIMEOUT)
+        timeout = (
+            None if AIOHTTP_CLIENT_TIMEOUT is None else float(AIOHTTP_CLIENT_TIMEOUT)
+        )
         async with httpx.AsyncClient(
             timeout=timeout,
             trust_env=True,
@@ -4533,7 +4718,9 @@ async def _send_openai_image_request(
                     data=request_data,
                     files=request_files,
                 ) as response:
-                    response_text = "\n".join([line async for line in response.aiter_lines()])
+                    response_text = "\n".join(
+                        [line async for line in response.aiter_lines()]
+                    )
             else:
                 response = await client.post(
                     url,
@@ -4699,9 +4886,7 @@ def _build_openai_image_upstream_error_detail(
         or (error_field if isinstance(error_field, str) else None)
     )
     error_code = (
-        body_dict.get("error_code")
-        or body_dict.get("code")
-        or nested_error.get("code")
+        body_dict.get("error_code") or body_dict.get("code") or nested_error.get("code")
     )
     title = str(body_dict.get("title") or "")
     detail = str(
@@ -4738,8 +4923,7 @@ def _build_openai_image_upstream_error_detail(
         )
 
     is_cloudflare_gateway_error = bool(
-        cloudflare_marker
-        and status_code in {502, 520, 521, 522, 523, 525, 526}
+        cloudflare_marker and status_code in {502, 520, 521, 522, 523, 525, 526}
     )
     if is_cloudflare_gateway_error:
         return (
@@ -4776,7 +4960,9 @@ def _get_openai_images_edit_url(base_url: str, api_config: Optional[dict]) -> st
         if normalized_url.endswith(suffix):
             normalized_url = normalized_url[: -len(suffix)]
 
-    is_azure = bool((api_config or {}).get("azure")) or "openai.azure.com" in normalized_url
+    is_azure = (
+        bool((api_config or {}).get("azure")) or "openai.azure.com" in normalized_url
+    )
     if is_azure:
         api_version = str((api_config or {}).get("api_version") or "2024-02-01")
         return f"{normalized_url}/images/edits?api-version={api_version}"
@@ -4826,13 +5012,39 @@ def _resolve_image_input_as_data_url(
     return mime_type, image_bytes, f"data:{mime_type};base64,{encoded}"
 
 
+def _summarize_openai_image_batch_error(
+    index: int, error: BaseException
+) -> dict[str, Any]:
+    detail = getattr(error, "detail", None)
+    if detail is None:
+        detail = str(error) or error.__class__.__name__
+
+    if isinstance(detail, (dict, list)):
+        try:
+            detail_text = json.dumps(detail, ensure_ascii=False, default=str)
+        except Exception:
+            detail_text = str(detail)
+    else:
+        detail_text = str(detail or "").strip()
+
+    status_code = getattr(error, "status_code", None)
+    failure: dict[str, Any] = {
+        "index": index,
+        "detail": detail_text or error.__class__.__name__,
+        "error_type": error.__class__.__name__,
+    }
+    if isinstance(status_code, int):
+        failure["status_code"] = status_code
+    return failure
+
+
 async def _run_openai_image_split_batch(
     *,
     route_label: str,
     model_id: str,
     n: int,
     run_single: Callable[[int], Awaitable[list[dict[str, str]]]],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     requested_n = max(1, int(n or 1))
     if requested_n <= 1:
         return await run_single(0)
@@ -4859,11 +5071,42 @@ async def _run_openai_image_split_batch(
         *(run_guarded(index) for index in range(requested_n)),
         return_exceptions=True,
     )
-    images: list[dict[str, str]] = []
-    for result in batch_results:
+    images: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for index, result in enumerate(batch_results):
         if isinstance(result, BaseException):
-            raise result
-        images.extend(result)
+            failures.append(_summarize_openai_image_batch_error(index, result))
+            continue
+        for image in result:
+            image_item = dict(image)
+            image_item.setdefault("slot_index", index)
+            images.append(image_item)
+    if images and failures:
+        try:
+            log.warning(
+                "openai_image_batch_split_partial route=%s model=%s requested_n=%s returned_n=%s failed_n=%s failed_indices=%s first_error=%s",
+                route_label,
+                model_id,
+                requested_n,
+                len(images),
+                len(failures),
+                [failure.get("index") for failure in failures],
+                failures[0].get("detail") if failures else "",
+            )
+        except Exception:
+            pass
+        raise OpenAIImagePartialBatchError(
+            route_label=route_label,
+            model_id=model_id,
+            requested_n=requested_n,
+            images=images,
+            failures=failures,
+        )
+    if failures:
+        first_failure_index = int(failures[0].get("index") or 0)
+        first_result = batch_results[first_failure_index]
+        if isinstance(first_result, BaseException):
+            raise first_result
     return images
 
 
@@ -4881,6 +5124,7 @@ async def _generate_via_openai_image_edits_endpoint(
 ) -> list[dict[str, str]]:
     requested_n = max(1, int(n or 1))
     if requested_n > 1:
+
         async def run_single(_index: int) -> list[dict[str, str]]:
             return await _generate_via_openai_image_edits_endpoint(
                 request,
@@ -4915,7 +5159,11 @@ async def _generate_via_openai_image_edits_endpoint(
             content_type=None,
         )
         content_type_header = next(
-            (header for header in list(headers.keys()) if header.lower() == "content-type"),
+            (
+                header
+                for header in list(headers.keys())
+                if header.lower() == "content-type"
+            ),
             None,
         )
         if content_type_header:
@@ -4963,7 +5211,9 @@ async def _generate_via_openai_image_edits_endpoint(
             upstream_model_id,
             str(image_url or "").strip(),
             source_file_id or "",
-            source_file_meta.get("name") or getattr(source_file, "filename", None) or "",
+            source_file_meta.get("name")
+            or getattr(source_file, "filename", None)
+            or "",
             source_file_meta.get("size") or "",
             hashlib.sha256(image_bytes).hexdigest(),
             image_mime or "",
@@ -4973,10 +5223,16 @@ async def _generate_via_openai_image_edits_endpoint(
             sorted(payload.keys()),
             [image_field_name],
             _get_openai_images_edit_url(base_url, api_config),
-            json.dumps(_redact_upstream_headers(headers), ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                _redact_upstream_headers(headers), ensure_ascii=False, sort_keys=True
+            ),
             os.getpid(),
             os.getcwd(),
-            json.dumps(_filter_process_debug_env(os.environ), ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                _filter_process_debug_env(os.environ),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         )
     except Exception:
         pass
@@ -5069,6 +5325,7 @@ async def _generate_via_openai_images_endpoint(
 ) -> list[dict[str, str]]:
     requested_n = max(1, int(n or 1))
     if requested_n > 1:
+
         async def run_single(_index: int) -> list[dict[str, str]]:
             return await _generate_via_openai_images_endpoint(
                 request,
@@ -5304,7 +5561,9 @@ async def _generate_via_openai_chat_image(
     api_config = source.get("api_config") or {}
     chat_url = openai_router._get_openai_chat_completions_url(base_url, api_config)
     upstream_model_id = _strip_connection_model_prefix(model_id, api_config)
-    use_responses_api = bool(prefer_responses) or openai_router._should_use_responses_api(
+    use_responses_api = bool(
+        prefer_responses
+    ) or openai_router._should_use_responses_api(
         base_url,
         api_config,
         upstream_model_id,
@@ -5383,7 +5642,9 @@ async def _generate_via_openai_chat_image(
         pass
 
     try:
-        timeout = None if AIOHTTP_CLIENT_TIMEOUT is None else float(AIOHTTP_CLIENT_TIMEOUT)
+        timeout = (
+            None if AIOHTTP_CLIENT_TIMEOUT is None else float(AIOHTTP_CLIENT_TIMEOUT)
+        )
         key_attempts = _get_image_source_key_attempts("openai", source)
         async with httpx.AsyncClient(
             timeout=timeout,
@@ -5392,7 +5653,9 @@ async def _generate_via_openai_chat_image(
             follow_redirects=True,
         ) as client:
             for attempt_idx, attempt in enumerate(key_attempts):
-                headers = _build_openai_image_headers(base_url, attempt.key, api_config, user)
+                headers = _build_openai_image_headers(
+                    base_url, attempt.key, api_config, user
+                )
                 if use_responses_api:
                     response = await client.post(
                         request_url,
@@ -5473,8 +5736,12 @@ async def _generate_via_openai_chat_image(
                         json=payload,
                     ) as response:
                         if response.status_code >= 400:
-                            error_body = (await response.aread()).decode("utf-8", errors="replace")
-                            if attempt_idx + 1 < len(key_attempts) and should_retry_api_key(
+                            error_body = (await response.aread()).decode(
+                                "utf-8", errors="replace"
+                            )
+                            if attempt_idx + 1 < len(
+                                key_attempts
+                            ) and should_retry_api_key(
                                 api_config,
                                 status_code=response.status_code,
                                 body=error_body,
@@ -5500,16 +5767,26 @@ async def _generate_via_openai_chat_image(
 
                         async for raw_line in response.aiter_lines():
                             line = str(raw_line or "").strip()
-                            if not line or line.startswith(":") or line.startswith("event:"):
+                            if (
+                                not line
+                                or line.startswith(":")
+                                or line.startswith("event:")
+                            ):
                                 continue
-                            data = line[len("data:") :].strip() if line.startswith("data:") else line
+                            data = (
+                                line[len("data:") :].strip()
+                                if line.startswith("data:")
+                                else line
+                            )
                             if not data or data == "[DONE]":
                                 continue
                             try:
                                 event = json.loads(data)
                             except Exception:
                                 continue
-                            if isinstance(event, dict) and isinstance(event.get("usage"), dict):
+                            if isinstance(event, dict) and isinstance(
+                                event.get("usage"), dict
+                            ):
                                 usage = event["usage"]
                             _append_unique_generated_images(
                                 images,
@@ -5537,7 +5814,7 @@ async def _generate_via_openai_chat_image(
                         except Exception:
                             pass
                         break
-    except HTTPException:
+    except (HTTPException, OpenAIImagePartialBatchError):
         raise
     except Exception as error:
         raise RuntimeError(
@@ -5813,8 +6090,12 @@ async def image_generations(
     raster_size = effective_size or "512x512"
     width, height = tuple(map(int, raster_size.split("x")))
     selected_model_value = str(form_data.model or "").strip()
-    _selection_hint, selected_model = _split_image_model_selection_key(selected_model_value)
-    model_ref = dict(form_data.model_ref) if isinstance(form_data.model_ref, dict) else {}
+    _selection_hint, selected_model = _split_image_model_selection_key(
+        selected_model_value
+    )
+    model_ref = (
+        dict(form_data.model_ref) if isinstance(form_data.model_ref, dict) else {}
+    )
     parsed_selection_id = parse_selection_id(selected_model_value)
     if parsed_selection_id:
         selected_model = parsed_selection_id["model_id"]
@@ -5837,7 +6118,9 @@ async def image_generations(
         selection_provider = str(_selection_hint.get("provider") or "").strip().lower()
         if selection_provider in {"openai", "gemini", "grok"}:
             selected_engine = selection_provider
-    connection_user = getattr(getattr(request, "state", None), "connection_user", None) or user
+    connection_user = (
+        getattr(getattr(request, "state", None), "connection_user", None) or user
+    )
 
     if (
         selected_engine in {"openai", "gemini", "grok"}
@@ -5898,7 +6181,9 @@ async def image_generations(
     r = None
     try:
         if selected_engine == "openai":
-            credential_source = _normalize_credential_source(form_data.credential_source)
+            credential_source = _normalize_credential_source(
+                form_data.credential_source
+            )
             source: Optional[dict[str, Any]] = None
             discovered_models: Optional[list[dict[str, Any]]] = None
             if credential_source == "auto" and form_data.connection_index is None:
@@ -5920,12 +6205,15 @@ async def image_generations(
                         ),
                     )
                 if source is None:
-                    source, discovered_models = await _select_runtime_image_provider_source(
-                        request,
-                        connection_user,
-                        "openai",
-                        selected_model=selected_model_value,
-                        prefer_shared=not bool(form_data.model) and bool(selected_model),
+                    source, discovered_models = (
+                        await _select_runtime_image_provider_source(
+                            request,
+                            connection_user,
+                            "openai",
+                            selected_model=selected_model_value,
+                            prefer_shared=not bool(form_data.model)
+                            and bool(selected_model),
+                        )
                     )
 
             if source is None:
@@ -5951,12 +6239,22 @@ async def image_generations(
                     else:
                         raise
 
-            filtered_models = _apply_image_model_regex_filter(request, discovered_models)
+            filtered_models = _apply_image_model_regex_filter(
+                request, discovered_models
+            )
             selected_model_meta = next(
-                (model for model in filtered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in filtered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             ) or next(
-                (model for model in discovered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in discovered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             )
 
@@ -5982,9 +6280,9 @@ async def image_generations(
                     "openai", model_ref, selected_model
                 )
 
-            generation_mode = (
-                (selected_model_meta or {}).get("generation_mode") or "openai_images"
-            )
+            generation_mode = (selected_model_meta or {}).get(
+                "generation_mode"
+            ) or "openai_images"
             openai_image_route = _resolve_openai_image_request_route(
                 selected_model_meta,
                 form_data.image_route_mode,
@@ -6022,7 +6320,10 @@ async def image_generations(
                     fallback_size=effective_size,
                 )
 
-            if openai_image_route in {OPENAI_IMAGE_ROUTE_CHAT, OPENAI_IMAGE_ROUTE_RESPONSES}:
+            if openai_image_route in {
+                OPENAI_IMAGE_ROUTE_CHAT,
+                OPENAI_IMAGE_ROUTE_RESPONSES,
+            }:
                 return await _generate_via_openai_chat_image(
                     request,
                     user,
@@ -6063,7 +6364,9 @@ async def image_generations(
             )
 
         elif selected_engine == "gemini":
-            credential_source = _normalize_credential_source(form_data.credential_source)
+            credential_source = _normalize_credential_source(
+                form_data.credential_source
+            )
             source: Optional[dict[str, Any]] = None
             discovered_models: Optional[list[dict[str, Any]]] = None
             if credential_source == "auto" and form_data.connection_index is None:
@@ -6085,12 +6388,15 @@ async def image_generations(
                         ),
                     )
                 if source is None:
-                    source, discovered_models = await _select_runtime_image_provider_source(
-                        request,
-                        connection_user,
-                        "gemini",
-                        selected_model=selected_model_value,
-                        prefer_shared=not bool(form_data.model) and bool(selected_model),
+                    source, discovered_models = (
+                        await _select_runtime_image_provider_source(
+                            request,
+                            connection_user,
+                            "gemini",
+                            selected_model=selected_model_value,
+                            prefer_shared=not bool(form_data.model)
+                            and bool(selected_model),
+                        )
                     )
             if source is None:
                 source = _resolve_image_provider_source(
@@ -6115,12 +6421,22 @@ async def image_generations(
                     else:
                         raise
 
-            filtered_models = _apply_image_model_regex_filter(request, discovered_models)
+            filtered_models = _apply_image_model_regex_filter(
+                request, discovered_models
+            )
             selected_model_meta = next(
-                (model for model in filtered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in filtered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             ) or next(
-                (model for model in discovered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in discovered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             )
 
@@ -6149,9 +6465,9 @@ async def image_generations(
                     "gemini", model_ref, selected_model
                 )
 
-            generation_mode = (
-                (selected_model_meta or {}).get("generation_mode") or "gemini_predict"
-            )
+            generation_mode = (selected_model_meta or {}).get(
+                "generation_mode"
+            ) or "gemini_predict"
             requested_n = (
                 max(1, min(int(form_data.n or 1), 4))
                 if (selected_model_meta or {}).get("supports_batch", True)
@@ -6178,7 +6494,8 @@ async def image_generations(
                     ),
                     aspect_ratio=(
                         requested_aspect_ratio
-                        if (selected_model_meta or {}).get("size_mode") == "aspect_ratio"
+                        if (selected_model_meta or {}).get("size_mode")
+                        == "aspect_ratio"
                         else None
                     ),
                     source=source,
@@ -6194,7 +6511,9 @@ async def image_generations(
             )
 
         elif selected_engine == "grok":
-            credential_source = _normalize_credential_source(form_data.credential_source)
+            credential_source = _normalize_credential_source(
+                form_data.credential_source
+            )
             source: Optional[dict[str, Any]] = None
             discovered_models: Optional[list[dict[str, Any]]] = None
             if credential_source == "auto" and form_data.connection_index is None:
@@ -6216,12 +6535,15 @@ async def image_generations(
                         ),
                     )
                 if source is None:
-                    source, discovered_models = await _select_runtime_image_provider_source(
-                        request,
-                        connection_user,
-                        "grok",
-                        selected_model=selected_model_value,
-                        prefer_shared=not bool(form_data.model) and bool(selected_model),
+                    source, discovered_models = (
+                        await _select_runtime_image_provider_source(
+                            request,
+                            connection_user,
+                            "grok",
+                            selected_model=selected_model_value,
+                            prefer_shared=not bool(form_data.model)
+                            and bool(selected_model),
+                        )
                     )
             if source is None:
                 source = _resolve_image_provider_source(
@@ -6246,12 +6568,22 @@ async def image_generations(
                     else:
                         raise
 
-            filtered_models = _apply_image_model_regex_filter(request, discovered_models)
+            filtered_models = _apply_image_model_regex_filter(
+                request, discovered_models
+            )
             selected_model_meta = next(
-                (model for model in filtered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in filtered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             ) or next(
-                (model for model in discovered_models if model.get("id") == selected_model),
+                (
+                    model
+                    for model in discovered_models
+                    if model.get("id") == selected_model
+                ),
                 None,
             )
 
@@ -6414,7 +6746,7 @@ async def image_generations(
                 )
                 images.append({"url": url})
             return images
-    except HTTPException:
+    except (HTTPException, OpenAIImagePartialBatchError):
         raise
     except Exception as e:
         error = (

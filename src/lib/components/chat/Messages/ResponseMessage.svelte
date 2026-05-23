@@ -66,7 +66,8 @@
 		AlignLeft,
 		Lightbulb,
 		Globe,
-		ArrowRight
+		ArrowRight,
+		CircleAlert
 	} from 'lucide-svelte';
 	import { DropdownMenu } from 'bits-ui';
 	import { flyAndScale } from '$lib/utils/transitions';
@@ -108,6 +109,9 @@
 			path?: string;
 			source?: string;
 			generated?: boolean;
+			status?: string;
+			slot_index?: number;
+			error?: string;
 			[key: string]: unknown;
 		}[];
 		timestamp: number;
@@ -116,6 +120,9 @@
 			done: boolean;
 			action: string;
 			description: string;
+			count?: number;
+			failed?: number;
+			total?: number;
 			urls?: string[];
 			query?: string;
 		}[];
@@ -123,6 +130,9 @@
 			done: boolean;
 			action: string;
 			description: string;
+			count?: number;
+			failed?: number;
+			total?: number;
 			urls?: string[];
 			query?: string;
 		};
@@ -163,6 +173,7 @@
 			usage?: unknown;
 		};
 	}
+	type MessageFile = NonNullable<MessageType['files']>[number];
 
 	export let chatId = '';
 	export let history;
@@ -215,6 +226,28 @@
 	$: hasVisibleAssistantOutput = getVisibleAssistantOutput(message?.content ?? '') !== '';
 	$: visibleMessageFiles = (message?.files ?? []).filter(
 		(file) => file?.source !== 'code_interpreter' && file?.generated !== true
+	);
+	const isImageGenerationResultFile = (file: MessageFile) =>
+		file?.source === 'image_generation' || file?.type === 'image_generation_error';
+	const imageGenerationSlotNumber = (file: MessageFile, index: number) => {
+		const rawSlotIndex = Number(file?.slot_index);
+		return Number.isFinite(rawSlotIndex) ? rawSlotIndex + 1 : index + 1;
+	};
+	const imageGenerationErrorText = (file: MessageFile) => {
+		if (file?.error_code === 'missing_image_result') {
+			return tr('上游没有返回这张图片。', 'The upstream did not return this image.');
+		}
+		const text = `${file?.error ?? ''}`.trim();
+		return text || tr('图片生成失败', 'Image generation failed');
+	};
+	$: imageGenerationResultFiles = visibleMessageFiles
+		.filter(isImageGenerationResultFile)
+		.sort((a, b) => Number(a?.slot_index ?? 0) - Number(b?.slot_index ?? 0));
+	$: showImageGenerationResultGrid =
+		imageGenerationResultFiles.length > 1 ||
+		imageGenerationResultFiles.some((file) => file?.type === 'image_generation_error');
+	$: otherVisibleMessageFiles = visibleMessageFiles.filter(
+		(file) => !showImageGenerationResultGrid || !isImageGenerationResultFile(file)
 	);
 	$: hasVisibleMessageFiles = messageHasVisibleFiles(message?.files);
 	$: renderableMessageError = getRenderableMessageError(message?.error, message?.files);
@@ -1121,9 +1154,52 @@
 							{/if}
 						{/if}
 
-						{#if visibleMessageFiles.filter((f) => f.type === 'image').length > 0}
+						{#if showImageGenerationResultGrid}
+							<div
+								class="my-2 grid w-full max-w-[560px] grid-cols-2 gap-2"
+								aria-label={tr('图片生成结果', 'Image generation results')}
+							>
+								{#each imageGenerationResultFiles as file, index}
+									<div
+										class="min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900"
+									>
+										<div class="relative aspect-[4/5] bg-gray-100 dark:bg-gray-950">
+											{#if file.type === 'image' && file.url}
+												<Image
+													src={file.url}
+													alt={`${tr('第 {{index}} 张', 'Image {{index}}', {
+														index: imageGenerationSlotNumber(file, index)
+													})}`}
+													className="h-full w-full outline-hidden focus:outline-hidden"
+													imageClassName="h-full w-full object-cover"
+												/>
+											{:else}
+												<div
+													class="flex h-full w-full flex-col justify-between gap-3 bg-red-50 p-3 text-red-800 dark:bg-red-950/30 dark:text-red-200"
+												>
+													<div class="flex items-center gap-2 text-sm font-medium">
+														<CircleAlert className="size-4 shrink-0" strokeWidth="1.9" />
+														<span>{tr('生成失败', 'Failed')}</span>
+													</div>
+													<div class="min-h-0 overflow-y-auto text-xs leading-5 break-words">
+														{imageGenerationErrorText(file)}
+													</div>
+													<div class="text-[11px] text-red-600/80 dark:text-red-300/80">
+														{tr('第 {{index}} 张', 'Image {{index}}', {
+															index: imageGenerationSlotNumber(file, index)
+														})}
+													</div>
+												</div>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						{#if otherVisibleMessageFiles.filter((f) => f.type === 'image').length > 0}
 							<div class="my-1 flex overflow-x-auto gap-2 flex-wrap">
-								{#each visibleMessageFiles as file}
+								{#each otherVisibleMessageFiles as file}
 									<div>
 										{#if file.type === 'image'}
 											<Image

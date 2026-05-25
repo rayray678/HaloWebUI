@@ -909,15 +909,9 @@
 	<div class="max-w-6xl mx-auto space-y-6">
 		<section class="glass-section p-5 space-y-5">
 			<div class="@container flex flex-col gap-5">
-				<div class="flex flex-col gap-4 @[64rem]:flex-row @[64rem]:items-start @[64rem]:justify-between">
+				<div class="flex flex-col gap-4">
 					<div class="min-w-0 @[64rem]:flex-1">
-						<div class="inline-flex h-8 items-center gap-2 whitespace-nowrap rounded-full border border-gray-200/80 bg-white/80 px-3.5 text-xs font-medium leading-none text-gray-600 dark:border-gray-700/80 dark:bg-gray-900/70 dark:text-gray-300">
-							<span class="leading-none text-gray-400 dark:text-gray-500">{$i18n.t('Settings')}</span>
-							<span class="leading-none text-gray-300 dark:text-gray-600">/</span>
-							<span class="leading-none text-gray-900 dark:text-white">{$i18n.t('Database')}</span>
-						</div>
-
-						<div class="mt-3 flex items-start gap-3">
+						<div class="flex items-start gap-3">
 							<div class="glass-icon-badge {activeTabMeta.badgeColor}">
 								{#if selectedTab === 'chatManagement'}
 									<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-[18px] {activeTabMeta.iconColor}">
@@ -945,9 +939,9 @@
 						</div>
 					</div>
 
-					<div class="inline-flex max-w-full flex-wrap items-center gap-2 self-start rounded-2xl bg-gray-100 p-1 dark:bg-gray-850 @[64rem]:ml-auto @[64rem]:mt-11 @[64rem]:flex-nowrap @[64rem]:justify-end @[64rem]:shrink-0">
+					<div class="inline-flex max-w-full flex-wrap items-center gap-1.5 self-start rounded-xl bg-gray-100/70 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] dark:bg-gray-850/80 dark:shadow-none @[64rem]:flex-nowrap @[64rem]:shrink-0">
 						{#each visibleTabs as tab}
-							<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === tab ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = tab; }}>
+							<button type="button" class={`flex min-w-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${selectedTab === tab ? 'bg-white text-gray-900 shadow-[0_1px_3px_rgba(15,23,42,0.08)] dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:bg-white/50 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = tab; }}>
 								{#if tab === 'chatManagement'}
 									<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
 										<path stroke-linecap="round" stroke-linejoin="round" d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2z" />

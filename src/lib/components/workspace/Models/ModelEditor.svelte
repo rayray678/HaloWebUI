@@ -718,25 +718,20 @@
 					<!-- ==================== Hero Section ==================== -->
 					<section class="glass-section p-5 space-y-5">
 						<div class="@container flex flex-col gap-5">
-							<div class="flex flex-col gap-4 @[64rem]:flex-row @[64rem]:items-start @[64rem]:justify-between">
+							<div class="flex flex-col gap-4">
 								<div class="min-w-0 @[64rem]:flex-1">
-									<!-- Breadcrumb -->
-									<div class="inline-flex h-8 items-center gap-2 whitespace-nowrap rounded-full border border-gray-200/80 bg-white/80 px-3.5 text-xs font-medium leading-none text-gray-600 dark:border-gray-700/80 dark:bg-gray-900/70 dark:text-gray-300">
-										{#if onBack}
-											<button type="button" class="leading-none text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors" on:click={() => onBack()}>
-												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
-													<path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd" />
-												</svg>
-											</button>
-										{/if}
-										<a href="/workspace/models" class="leading-none text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">{$i18n.t('Models')}</a>
-										<span class="leading-none text-gray-300 dark:text-gray-600">/</span>
-										<span class="leading-none text-gray-900 dark:text-white">{edit ? $i18n.t('Edit') : $i18n.t('Create')}</span>
-									</div>
+									{#if onBack}
+										<button type="button" class="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-gray-400 transition-colors hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" on:click={() => onBack()}>
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
+												<path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd" />
+											</svg>
+											<span>{$i18n.t('Models')}</span>
+										</button>
+									{/if}
 
 									<!-- Icon badge + title -->
 									{#if activeTab}
-										<div class="mt-3 flex items-start gap-3">
+										<div class="flex items-start gap-3">
 											<div class="glass-icon-badge {activeTab.badgeColor}">
 												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-[18px] {activeTab.iconColor}">
 													{#each activeTab.iconPaths as pathD}
@@ -758,13 +753,13 @@
 								</div>
 
 								<!-- Tab bar -->
-								<div class="inline-flex max-w-full flex-wrap items-center gap-2 self-start rounded-2xl bg-gray-100 p-1 dark:bg-gray-850 @[64rem]:ml-auto @[64rem]:mt-11 @[64rem]:flex-nowrap @[64rem]:justify-end @[64rem]:shrink-0">
+								<div class="inline-flex max-w-full flex-wrap items-center gap-1.5 self-start rounded-xl bg-gray-100/70 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] dark:bg-gray-850/80 dark:shadow-none @[64rem]:flex-nowrap @[64rem]:shrink-0">
 									{#each allTabs as tab (tab.key)}
 										<button
 											type="button"
-											class="flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all {selectedTab === tab.key
-												? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
-												: 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}"
+											class="flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all {selectedTab === tab.key
+												? 'bg-white text-gray-900 shadow-[0_1px_3px_rgba(15,23,42,0.08)] dark:bg-gray-800 dark:text-white'
+												: 'text-gray-500 hover:bg-white/50 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-200'}"
 											on:click={() => {
 												selectedTab = tab.key;
 											}}

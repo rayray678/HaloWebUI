@@ -14,6 +14,7 @@ from open_webui.utils.middleware import (  # noqa: E402
     _append_text_to_content_blocks,
     _extract_stream_content_and_files,
     _get_builtin_web_tools_to_suppress,
+    _get_tool_call_result,
     _has_nonempty_text_content,
     _has_visible_assistant_output,
     _has_visible_message_files,
@@ -188,6 +189,41 @@ def test_append_text_to_content_blocks_starts_text_after_structured_tool_result(
     assert content_blocks[0]["results"][0]["content"] is tool_results
     assert content_blocks[-1] is appended_block
     assert _has_visible_assistant_output(content_blocks, []) is True
+
+
+def test_get_tool_call_result_treats_empty_result_as_completed():
+    found, content, files = _get_tool_call_result(
+        [{"tool_call_id": "call_1", "content": [], "files": []}],
+        "call_1",
+    )
+
+    assert found is True
+    assert content == []
+    assert files == []
+
+
+def test_get_tool_call_result_falls_back_to_result_order_for_empty_ids():
+    found, content, files = _get_tool_call_result(
+        [{"tool_call_id": "", "content": ""}],
+        "",
+        fallback_index=0,
+    )
+
+    assert found is True
+    assert content == ""
+    assert files is None
+
+
+def test_get_tool_call_result_requires_matching_explicit_id():
+    found, content, files = _get_tool_call_result(
+        [{"tool_call_id": "other_call", "content": "finished"}],
+        "call_1",
+        fallback_index=0,
+    )
+
+    assert found is False
+    assert content is None
+    assert files is None
 
 
 def test_merge_message_files_preserves_existing_non_image_files_and_deduplicates():

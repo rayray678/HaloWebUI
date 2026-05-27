@@ -1141,6 +1141,40 @@ def _finalize_reasoning_block_duration(
     return duration
 
 
+def _get_tool_call_result(
+    results: Any, tool_call_id: Any, *, fallback_index: Optional[int] = None
+) -> tuple[bool, Any, Any]:
+    if not isinstance(results, list):
+        return False, None, None
+
+    normalized_tool_call_id = str(tool_call_id or "")
+    if normalized_tool_call_id:
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if normalized_tool_call_id == str(result.get("tool_call_id") or ""):
+                return True, result.get("content", None), result.get("files", None)
+
+    if (
+        not normalized_tool_call_id
+        and
+        isinstance(fallback_index, int)
+        and 0 <= fallback_index < len(results)
+        and isinstance(results[fallback_index], dict)
+    ):
+        result = results[fallback_index]
+        return True, result.get("content", None), result.get("files", None)
+
+    if not normalized_tool_call_id:
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("tool_call_id") or "") == "":
+                return True, result.get("content", None), result.get("files", None)
+
+    return False, None, None
+
+
 def _has_nonempty_text_content(content_blocks: Any) -> bool:
     if not isinstance(content_blocks, list):
         return False
@@ -5744,7 +5778,7 @@ async def process_chat_response(
                         if results:
 
                             tool_calls_display_content = ""
-                            for tool_call in tool_calls:
+                            for tool_index, tool_call in enumerate(tool_calls):
 
                                 tool_call_id = tool_call.get("id", "")
                                 tool_name = tool_call.get("function", {}).get(
@@ -5754,15 +5788,17 @@ async def process_chat_response(
                                     "arguments", ""
                                 )
 
-                                tool_result = None
-                                tool_result_files = None
-                                for result in results:
-                                    if tool_call_id == result.get("tool_call_id", ""):
-                                        tool_result = result.get("content", None)
-                                        tool_result_files = result.get("files", None)
-                                        break
+                                (
+                                    tool_result_found,
+                                    tool_result,
+                                    tool_result_files,
+                                ) = _get_tool_call_result(
+                                    results,
+                                    tool_call_id,
+                                    fallback_index=tool_index,
+                                )
 
-                                if tool_result:
+                                if tool_result_found:
                                     tool_calls_display_content = f'{tool_calls_display_content}\n<details type="tool_calls" done="true" id="{tool_call_id}" name="{tool_name}" arguments="{html.escape(json.dumps(tool_arguments))}" result="{html.escape(json.dumps(tool_result))}" files="{html.escape(json.dumps(tool_result_files)) if tool_result_files else ""}">\n<summary>Tool Executed</summary>\n</details>\n'
                                 else:
                                     tool_calls_display_content = f'{tool_calls_display_content}\n<details type="tool_calls" done="false" id="{tool_call_id}" name="{tool_name}" arguments="{html.escape(json.dumps(tool_arguments))}">\n<summary>Executing...</summary>\n</details>'

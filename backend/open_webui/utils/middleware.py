@@ -3851,6 +3851,17 @@ async def chat_web_search_handler(
         )
 
     def build_search_error_status(exc: Exception) -> dict:
+        def is_duckduckgo_rate_limit_message(message: str) -> bool:
+            normalized = message.lower()
+            return (
+                ("ratelimit" in normalized or "rate limit" in normalized)
+                and (
+                    "duckduckgo" in normalized
+                    or "lite.duckduckgo.com" in normalized
+                    or "duckduckgo_search" in normalized
+                )
+            )
+
         detail = getattr(exc, "detail", None)
         if isinstance(detail, dict):
             code = str(detail.get("code") or "web_search_error")
@@ -3868,6 +3879,14 @@ async def chat_web_search_handler(
             }
 
         if isinstance(detail, str) and detail.strip():
+            if is_duckduckgo_rate_limit_message(detail):
+                return {
+                    "code": "duckduckgo_rate_limit",
+                    "message": "DuckDuckGo 当前限流，已跳过该搜索词。",
+                    "known": True,
+                    "warning": True,
+                }
+
             return {
                 "code": "web_search_error",
                 "message": detail.strip(),
@@ -3875,6 +3894,14 @@ async def chat_web_search_handler(
             }
 
         message = str(exc).strip()
+        if is_duckduckgo_rate_limit_message(message):
+            return {
+                "code": "duckduckgo_rate_limit",
+                "message": "DuckDuckGo 当前限流，已跳过该搜索词。",
+                "known": True,
+                "warning": True,
+            }
+
         return {
             "code": "web_search_error",
             "message": message or "联网搜索失败，已跳过该搜索词。",

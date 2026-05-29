@@ -47,7 +47,11 @@ const toStyle = (rules: Record<string, CssValue>) =>
 		.map(([key, value]) => `${key}: ${value}`)
 		.join('; ');
 
-const compactHtml = (html: string) => html.split('\n').map((line) => line.trim()).join('');
+const compactHtml = (html: string) =>
+	html
+		.split('\n')
+		.map((line) => line.trim())
+		.join('');
 
 const isFence = (line: string) => /^\s*```/.test(line);
 const isHeading = (line: string) => /^#{1,4}\s+\S/.test(line);
@@ -60,7 +64,10 @@ const isTableSeparator = (line: string) =>
 const looksLikeTableRow = (line: string) => line.includes('|') && !isFence(line);
 
 const stripTableEdges = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '');
-const parseTableRow = (line: string) => stripTableEdges(line).split('|').map((cell) => cell.trim());
+const parseTableRow = (line: string) =>
+	stripTableEdges(line)
+		.split('|')
+		.map((cell) => cell.trim());
 
 const reasoningDetailsBlockPattern =
 	/<details\b(?=[^>]*\btype\s*=\s*(?:"reasoning"|'reasoning'|reasoning)(?=[\s>]))[^>]*>[\s\S]*?<\/details>/gi;
@@ -283,60 +290,65 @@ const parseBlocks = (content: string): ParsedBlock[] => {
 	return blocks;
 };
 
-const getBlockPlainText = (block: ParsedBlock): string => {
-	switch (block.type) {
-		case 'heading':
-		case 'paragraph':
-		case 'quote':
-		case 'code':
-			return block.text;
-		case 'list':
-			return block.items.join(' ');
-		case 'table':
-			return [...block.headers, ...block.rows.flat()].join(' ');
+const headingFontSize = (level: number) => {
+	switch (level) {
+		case 1:
+			return '22px';
+		case 2:
+			return '19px';
+		case 3:
+			return '17px';
+		default:
+			return '15px';
 	}
 };
 
-const truncateText = (value: string, length = 180) => {
-	const text = normalizeText(value).replace(/\s+/g, ' ');
-	return text.length > length ? `${text.slice(0, length - 1)}...` : text;
-};
+const headingTag = (level: number) => `h${Math.min(Math.max(level + 1, 2), 5)}`;
 
-const renderCard = (inner: string, extraStyle: Record<string, CssValue> = {}) =>
-	`<section style="${escapeAttribute(
-		toStyle({
-			background: THEME.surface,
-			border: `1px solid ${THEME.borderSubtle}`,
-			'border-radius': '14px',
-			padding: '16px',
-			'box-shadow': '0 1px 2px rgba(15, 23, 42, 0.04)',
-			...extraStyle
-		})
-	)}">${inner}</section>`;
+const renderFlowBlock = (tag: string, inner: string, style: Record<string, CssValue>) =>
+	`<${tag} style="${escapeAttribute(toStyle(style))}">${inner}</${tag}>`;
+
+const renderFeatureBlock = (kind: string, inner: string, style: Record<string, CssValue>) =>
+	`<div data-halo-block="${escapeAttribute(kind)}" style="${escapeAttribute(toStyle(style))}">${inner}</div>`;
 
 const renderBlock = (block: ParsedBlock) => {
 	switch (block.type) {
-		case 'heading':
-			return renderCard(
-				`<h3 style="${escapeAttribute(
-					toStyle({ margin: 0, color: THEME.text, 'font-size': '18px', 'font-weight': 750 })
-				)}">${renderInline(block.text)}</h3>`,
-				{ 'border-left': `4px solid ${THEME.primary}` }
-			);
+		case 'heading': {
+			const tag = headingTag(block.level);
+			return renderFlowBlock(tag, renderInline(block.text), {
+				margin: block.level <= 2 ? '18px 0 4px' : '12px 0 2px',
+				padding: block.level <= 2 ? '0 0 8px' : 0,
+				color: THEME.text,
+				'font-size': headingFontSize(block.level),
+				'font-weight': 780,
+				'line-height': 1.35,
+				'letter-spacing': '-0.01em',
+				'border-bottom': block.level <= 2 ? `1px solid ${THEME.borderSubtle}` : undefined
+			});
+		}
 
 		case 'paragraph':
-			return renderCard(
-				`<p style="${escapeAttribute(
-					toStyle({ margin: 0, color: THEME.text, 'font-size': '14px', 'line-height': 1.75 })
-				)}">${renderInline(block.text)}</p>`
-			);
+			return renderFlowBlock('p', renderInline(block.text), {
+				margin: 0,
+				color: THEME.text,
+				'font-size': '14.5px',
+				'line-height': 1.82
+			});
 
 		case 'quote':
-			return renderCard(
+			return renderFeatureBlock(
+				'quote',
 				`<blockquote style="${escapeAttribute(
-					toStyle({ margin: 0, color: THEME.text, 'font-size': '14px', 'line-height': 1.75 })
+					toStyle({ margin: 0, color: THEME.text, 'font-size': '14px', 'line-height': 1.78 })
 				)}">${renderInline(block.text)}</blockquote>`,
-				{ background: THEME.accentSoft, border: `1px solid ${THEME.accent}` }
+				{
+					margin: '4px 0',
+					padding: '14px 16px',
+					background: `linear-gradient(135deg, ${THEME.accentSoft}, ${THEME.surface})`,
+					border: `1px solid ${THEME.borderSubtle}`,
+					'border-left': `4px solid ${THEME.accent}`,
+					'border-radius': '14px'
+				}
 			);
 
 		case 'list': {
@@ -348,23 +360,40 @@ const renderBlock = (block: ParsedBlock) => {
 				)
 				.join('');
 
-			return renderCard(
-				`<${tag} style="${escapeAttribute(
-					toStyle({ margin: 0, padding: block.ordered ? '0 0 0 22px' : '0 0 0 20px', color: THEME.text, 'font-size': '14px', 'line-height': 1.7 })
-				)}">${items}</${tag}>`
-			);
+			return renderFlowBlock(tag, items, {
+				margin: 0,
+				padding: block.ordered ? '0 0 0 24px' : '0 0 0 22px',
+				color: THEME.text,
+				'font-size': '14.5px',
+				'line-height': 1.78
+			});
 		}
 
 		case 'code':
-			return renderCard(
+			return renderFeatureBlock(
+				'code',
 				`${
 					block.lang
-						? `<div style="${escapeAttribute(toStyle({ color: THEME.muted, 'font-size': '12px', 'margin-bottom': '8px' }))}">${escapeHtml(block.lang)}</div>`
+						? `<div style="${escapeAttribute(toStyle({ color: THEME.codeText, opacity: 0.76, 'font-size': '12px', padding: '10px 14px 0' }))}">${escapeHtml(block.lang)}</div>`
 						: ''
 				}<pre style="${escapeAttribute(
-					toStyle({ margin: 0, padding: '14px', overflow: 'auto', background: THEME.codeBg, color: THEME.codeText, 'border-radius': '12px', 'font-size': '13px', 'line-height': 1.6 })
+					toStyle({
+						margin: 0,
+						padding: block.lang ? '8px 14px 14px' : '14px',
+						overflow: 'auto',
+						background: 'transparent',
+						color: THEME.codeText,
+						'font-size': '13px',
+						'line-height': 1.65
+					})
 				)}"><code>${escapeHtml(block.text)}</code></pre>`,
-				{ padding: '12px' }
+				{
+					margin: '4px 0',
+					background: THEME.codeBg,
+					'border-radius': '14px',
+					overflow: 'hidden',
+					'box-shadow': '0 12px 28px rgba(15, 23, 42, 0.12)'
+				}
 			);
 
 		case 'table': {
@@ -386,9 +415,17 @@ const renderBlock = (block: ParsedBlock) => {
 				)
 				.join('');
 
-			return renderCard(
+			return renderFeatureBlock(
+				'table',
 				`<div style="${escapeAttribute(toStyle({ overflow: 'auto', 'max-width': '100%' }))}"><table style="${escapeAttribute(toStyle({ width: '100%', 'border-collapse': 'collapse' }))}"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`,
-				{ padding: '12px' }
+				{
+					margin: '4px 0',
+					background: THEME.surface,
+					border: `1px solid ${THEME.borderSubtle}`,
+					'border-radius': '14px',
+					overflow: 'hidden',
+					'box-shadow': '0 8px 24px rgba(15, 23, 42, 0.05)'
+				}
 			);
 		}
 	}
@@ -415,45 +452,29 @@ export const renderResponseHtmlFormat = (content: string): string => {
 		return '';
 	}
 
-	const titleBlock = blocks.find((block) => block.type === 'heading') ?? blocks[0];
-	const title = titleBlock.type === 'heading' ? titleBlock.text : truncateText(getBlockPlainText(titleBlock), 80);
-	const subtitleBlock = blocks.find((block) => block.type === 'paragraph');
-	const subtitle = subtitleBlock ? truncateText(subtitleBlock.text) : '';
-	const bodyBlocks = blocks.filter((block, index) => !(index === 0 && block === titleBlock));
-
-	const hero = `<div style="${escapeAttribute(
-		toStyle({
-			padding: '20px',
-			background: `linear-gradient(135deg, ${THEME.primarySoft}, ${THEME.surface})`,
-			border: `1px solid ${THEME.border}`,
-			'border-radius': '16px',
-			'box-shadow': THEME.shadow
-		})
-	)}"><div style="${escapeAttribute(
-		toStyle({ color: THEME.primary, 'font-size': '12px', 'font-weight': 700, 'letter-spacing': '0.08em', 'text-transform': 'uppercase', 'margin-bottom': '8px' })
-	)}">HTML FORMAT</div><h2 style="${escapeAttribute(
-		toStyle({ margin: 0, color: THEME.text, 'font-size': '22px', 'line-height': 1.35, 'font-weight': 800 })
-	)}">${renderInline(title)}</h2>${
-		subtitle
-			? `<p style="${escapeAttribute(toStyle({ margin: '10px 0 0', color: THEME.muted, 'font-size': '14px', 'line-height': 1.7 }))}">${renderInline(subtitle)}</p>`
-			: ''
-	}</div>`;
-
-	const body = bodyBlocks.map(renderBlock).join('');
+	const body = blocks.map(renderBlock).join('');
 	const root = `<div data-halo-response-html-format="inline" style="${escapeAttribute(
 		toStyle({
 			margin: '8px 0',
-			padding: '14px',
-			background: THEME.bg,
+			padding: '1px',
+			background: `linear-gradient(135deg, ${THEME.primarySoft}, ${THEME.bg} 48%, ${THEME.accentSoft})`,
 			color: THEME.text,
-			border: `1px solid ${THEME.border}`,
-			'border-radius': '18px',
-			'font-family': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+			border: `1px solid ${THEME.borderSubtle}`,
+			'border-radius': '20px',
+			'box-shadow': THEME.shadow,
+			'font-family':
+				"-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
 			'line-height': 1.6,
 			'max-width': '100%',
 			overflow: 'hidden'
 		})
-	)}">${hero}<div style="${escapeAttribute(toStyle({ display: 'grid', gap: '10px', 'margin-top': '12px' }))}">${body}</div></div>`;
+	)}"><div style="${escapeAttribute(
+		toStyle({
+			background: THEME.surface,
+			'border-radius': '19px',
+			padding: '22px 24px'
+		})
+	)}"><div style="${escapeAttribute(toStyle({ display: 'flex', 'flex-direction': 'column', gap: '12px' }))}">${body}</div></div></div>`;
 
 	return compactHtml(root);
 };

@@ -1074,24 +1074,31 @@
 							class="px-3 pb-0.5 pt-1.5 text-left w-full flex flex-col absolute bottom-0 left-0 right-0 bg-linear-to-t from-white dark:from-gray-900 z-10"
 						>
 							{#if atSelectedModel !== undefined}
-								<div class="flex items-center justify-between w-full">
-									<div class="pl-[1px] flex items-center gap-2 text-sm dark:text-gray-500">
+								<div class="flex min-w-0 items-center justify-between gap-2 w-full">
+									<div
+										class="pl-[1px] flex min-w-0 flex-1 items-center gap-2 text-sm dark:text-gray-500"
+									>
 										<ModelIcon
 											alt="model profile"
-											className="size-3.5 max-w-[28px] rounded-lg"
+											className="size-3.5 max-w-[28px] shrink-0 rounded-lg"
 											src={atSelectedModelListItem?.info?.meta?.profile_image_url ??
 												atSelectedModelListItem?.meta?.profile_image_url ??
 												`${WEBUI_BASE_URL}/static/favicon.png`}
 										/>
-										<div class="translate-y-[0.5px]">
-											Talking to <span class=" font-medium"
-												>{getModelChatDisplayName(atSelectedModel)}</span
+										<div class="flex min-w-0 translate-y-[0.5px] items-baseline gap-1">
+											<span class="shrink-0">Talking to</span>
+											<span
+												class="min-w-0 truncate font-medium"
+												title={getModelChatDisplayName(atSelectedModel)}
 											>
+												{getModelChatDisplayName(atSelectedModel)}
+											</span>
 										</div>
 									</div>
-									<div>
+									<div class="shrink-0">
 										<button
-											class="flex items-center dark:text-gray-500"
+											class="flex shrink-0 items-center dark:text-gray-500"
+											aria-label={$i18n.t('Cancel selected model')}
 											on:click={() => {
 												atSelectedModel = undefined;
 											}}
@@ -1733,7 +1740,10 @@
 										{#if $config?.features?.enable_image_generation && ($_user.role === 'admin' || $_user?.permissions?.features?.image_generation) && (imageGenerationEnabled || imageGenerationPanelOpen)}
 											{#if imageGenerationEnabled}
 												<Tooltip
-													content={tr('图片生成已开启，点击关闭', 'Image generation is on. Click to disable')}
+													content={tr(
+														'图片生成已开启，点击关闭',
+														'Image generation is on. Click to disable'
+													)}
 													placement="top"
 												>
 													<button
@@ -1865,8 +1875,8 @@
 													</Tooltip>
 												{/if}
 
-													{#if $config?.features?.enable_code_interpreter && ($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter) && codeInterpreterEnabled}
-														<Tooltip content={$i18n.t('已开启代码解释器，点击关闭')} placement="top">
+												{#if $config?.features?.enable_code_interpreter && ($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter) && codeInterpreterEnabled}
+													<Tooltip content={$i18n.t('已开启代码解释器，点击关闭')} placement="top">
 														<button
 															type="button"
 															class={compactFeatureBadgeClass}

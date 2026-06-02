@@ -72,7 +72,7 @@
 	$: temporaryChatAccess = getTemporaryChatAccess($user);
 </script>
 
-<div class="flex flex-col w-full items-start">
+<div class="flex min-w-0 flex-col w-full items-start">
 	{#if $modelsStatus === 'loading' && $models.length === 0}
 		<div class="flex items-center gap-2 text-xs text-gray-500 ml-1 pb-1">
 			<Spinner className="size-3.5" />
@@ -90,9 +90,9 @@
 	{#if selectedModels.length <= 1}
 		<!-- 单模型：保持原有的完整下拉选择器样式 -->
 		{#each selectedModels as selectedModel, selectedModelIdx}
-			<div class="flex flex-wrap w-full max-w-fit items-center gap-1.5">
-				<div class="overflow-hidden">
-					<div class="max-w-full">
+			<div class="flex w-full min-w-0 max-w-full items-center gap-1.5">
+				<div class="min-w-0 flex-1 overflow-hidden">
+					<div class="min-w-0 max-w-full">
 						<Selector
 							id={`${selectedModelIdx}`}
 							placeholder={$i18n.t('Select a model')}
@@ -144,12 +144,12 @@
 		{/each}
 	{:else}
 		<!-- 多模型：每个模型都是完整胶囊，删除按钮始终占位可见，避免 hover 时出现隐形框。 -->
-		<div class="flex flex-wrap items-center gap-1.5 max-w-full">
+		<div class="flex w-full min-w-0 flex-wrap items-center gap-1.5 max-w-full">
 			{#each selectedModels as selectedModel, selectedModelIdx}
 				<div
-					class="group/chip flex max-w-full items-center gap-1 rounded-xl border border-gray-200 bg-white px-1 py-0.5 shadow-xs transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-gray-600"
+					class="group/chip flex min-w-0 max-w-full items-center gap-1 rounded-xl border border-gray-200 bg-white px-1 py-0.5 shadow-xs transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-gray-600"
 				>
-					<div class="overflow-hidden max-w-[210px] rounded-lg">
+					<div class="min-w-0 overflow-hidden max-w-[210px] rounded-lg">
 						<Selector
 							id={`${selectedModelIdx}`}
 							placeholder={$i18n.t('Select a model')}
@@ -203,7 +203,7 @@
 				<Tooltip content={$i18n.t('Add Model')}>
 					<button
 						class="inline-flex items-center justify-center
-							size-7 rounded-xl
+							size-7 shrink-0 rounded-xl
 							text-gray-400 dark:text-gray-500
 							bg-white dark:bg-gray-900/70
 							border border-dashed border-gray-300 dark:border-gray-600
